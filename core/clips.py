@@ -52,9 +52,10 @@ def clip_source_range_s(clip):
     return clip["src_start_frame"] / fps, (clip["src_end_frame"] + 1) / fps
 
 
-def rebuild_from_keeps(media_pool, project, source_timeline, clip_keeps, suffix, log):
+def rebuild_from_keeps(media_pool, project, base_name, clip_keeps, suffix, log):
     """Create a new timeline containing only the kept segments.
 
+    base_name: name of the original timeline (suffix is appended to it).
     clip_keeps: list of (clip_dict, [(start_s, end_s), ...]) keep intervals in
     source seconds.
     """
@@ -75,7 +76,7 @@ def rebuild_from_keeps(media_pool, project, source_timeline, clip_keeps, suffix,
     if not clip_infos:
         raise RuntimeError("Nothing left to keep -- check thresholds.")
 
-    new_name = source_timeline.GetName() + suffix
+    new_name = base_name + suffix
     new_timeline = media_pool.CreateEmptyTimeline(new_name)
     if new_timeline is None:
         raise RuntimeError(f"Could not create timeline '{new_name}'.")

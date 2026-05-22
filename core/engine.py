@@ -123,12 +123,16 @@ def analyze(settings=None, log=print, resolve_app=None):
     n_cut = sum(1 for c in out_clips for w in c["words"] if w["cut"])
     log(f"Analysis done: {sum(len(c['words']) for c in out_clips)} words, "
         f"{n_cut} marked for removal.")
-    return {"fps": fps, "clips": out_clips}
+    return {"fps": fps, "clips": out_clips, "timeline_name": timeline.GetName()}
 
 
-def apply(analysis, settings=None, log=print, resolve_app=None):
+def apply(analysis, settings=None, log=print, resolve_app=None, replace_timeline=None):
     """Rebuild the timeline from an analysis whose word `cut` flags may have been
-    edited by the user. Cuts = flagged words (+ silences if enabled)."""
+    edited by the user. Cuts = flagged words (+ silences if enabled).
+
+    If `replace_timeline` is given, it is deleted after the new one is built --
+    used by the live/auto-apply mode so previews don't pile up.
+    """
     cfg = dict(DEFAULTS)
     if settings:
         cfg.update(settings)
@@ -148,7 +152,14 @@ def apply(analysis, settings=None, log=print, resolve_app=None):
         log(f"  [{clip['index']}] {len(cuts)} cut(s), {len(keeps)} keep(s), ~{removed:.1f}s removed.")
         clip_keeps.append((clip, keeps))
 
-    current = rebuild_from_keeps(media_pool, project, timeline, clip_keeps, cfg["suffix"], log)
+    base_name = analysis.get("timeline_name") or timeline.GetName()
+    current = rebuild_from_keeps(media_pool, project, base_name, clip_keeps, cfg["suffix"], log)
+
+    if replace_timeline is not None and replace_timeline != current:
+        try:
+            media_pool.DeleteTimelines([replace_timeline])
+        except Exception as exc:
+            log(f"  (could not delete previous preview: {exc})")
 
     if cfg["make_captions"]:
         log("Generating captions on the new timeline...")
@@ -219,7 +230,7 @@ def run(settings=None, log=print, resolve_app=None):
                 f"~{removed:.1f}s removed.")
             clip_keeps.append((clip, keeps))
 
-        current = rebuild_from_keeps(media_pool, project, timeline, clip_keeps,
+        current = rebuild_from_keeps(media_pool, project, timeline.GetName(), clip_keeps,
                                      cfg["suffix"], log)
 
     if cfg["make_captions"]:

@@ -44,7 +44,8 @@ def run(resolve_app=None):
     root.geometry("560x820")
 
     log_q = queue.Queue()
-    state = {"analysis": None, "busy": False, "words_flat": []}
+    state = {"analysis": None, "busy": False, "words_flat": [],
+             "preview_tl": None, "live_dirty": False, "after_id": None}
 
     main = ttk.Frame(root, padding=12)
     main.pack(fill="both", expand=True)
@@ -100,8 +101,11 @@ def run(resolve_app=None):
     act.pack(fill="x")
     analyze_btn = ttk.Button(act, text="1. Analyzovat")
     analyze_btn.pack(side="left")
+    v_live = tk.BooleanVar(value=False)
+    live_cb = ttk.Checkbutton(act, text="Živě", variable=v_live)
+    live_cb.pack(side="left", padx=8)
     v_cap = tk.BooleanVar(value=engine.DEFAULTS["make_captions"])
-    ttk.Checkbutton(act, text="Titulky při aplikaci", variable=v_cap).pack(side="left", padx=8)
+    ttk.Checkbutton(act, text="Titulky", variable=v_cap).pack(side="left")
     apply_btn = ttk.Button(act, text="2. Aplikovat střih", state="disabled")
     apply_btn.pack(side="right")
 
@@ -177,6 +181,8 @@ def run(resolve_app=None):
             w["cut"], w["reason"] = True, (w["reason"] or "manual")
         style_word(idx)
         update_summary()
+        if v_live.get():
+            schedule_live()
 
     def render_transcript(analysis):
         state["words_flat"] = [w for entry in analysis["clips"] for w in entry["words"]]
@@ -216,22 +222,41 @@ def run(resolve_app=None):
                 log_q.put(("__ERR__", str(exc)))
         threading.Thread(target=worker, daemon=True).start()
 
-    def on_apply():
+    def start_apply(live):
         if state["busy"] or not state["analysis"]:
             return
         set_busy(True)
-        status.configure(text="Aplikuji střih…")
+        status.configure(text="Aplikuji živě…" if live else "Aplikuji střih…")
         settings = collect_settings()
+        if live:
+            settings = dict(settings, make_captions=False)  # captions only on manual apply
         analysis = state["analysis"]
+        prev = state["preview_tl"]
 
         def worker():
             try:
-                engine.apply(analysis, settings, log=lambda m: log_q.put(str(m)),
-                             resolve_app=resolve_app)
-                log_q.put(("__DONE__", "Hotovo ✅ (nová timeline)"))
+                tl = engine.apply(analysis, settings, log=lambda m: log_q.put(str(m)),
+                                  resolve_app=resolve_app, replace_timeline=prev)
+                log_q.put(("__APPLIED__", tl))
             except Exception as exc:
                 log_q.put(("__ERR__", str(exc)))
         threading.Thread(target=worker, daemon=True).start()
+
+    def schedule_live():
+        if state["after_id"]:
+            root.after_cancel(state["after_id"])
+        state["after_id"] = root.after(700, trigger_live)
+
+    def trigger_live():
+        state["after_id"] = None
+        if state["busy"]:
+            state["live_dirty"] = True   # rebuild again once the current one finishes
+        else:
+            start_apply(live=True)
+
+    def on_live_toggle():
+        if v_live.get() and state["analysis"]:
+            schedule_live()
 
     def poll():
         try:
@@ -243,9 +268,13 @@ def run(resolve_app=None):
                         state["analysis"] = val
                         render_transcript(val)
                         set_busy(False)
-                    elif kind == "__DONE__":
+                    elif kind == "__APPLIED__":
+                        state["preview_tl"] = val
                         set_busy(False)
-                        status.configure(text=val)
+                        status.configure(text="Hotovo ✅")
+                        if state["live_dirty"]:
+                            state["live_dirty"] = False
+                            schedule_live()
                     elif kind == "__ERR__":
                         set_busy(False)
                         status.configure(text=f"Chyba ❌: {val}")
@@ -257,6 +286,7 @@ def run(resolve_app=None):
         root.after(120, poll)
 
     analyze_btn.configure(command=on_analyze)
-    apply_btn.configure(command=on_apply)
+    apply_btn.configure(command=lambda: start_apply(live=False))
+    live_cb.configure(command=on_live_toggle)
     root.after(120, poll)
     root.mainloop()
