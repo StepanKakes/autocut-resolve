@@ -74,28 +74,44 @@ def _get_bmd_module():
     return getattr(__main__, "bmd", None)
 
 
-def get_ui(resolve):
+def get_ui(resolve, log=print):
     """Return (UIManager, UIDispatcher) for building native windows.
 
-    Resolve injects `fusion`/`bmd` globals only for Lua scripts, not Python.
-    The UIManager must come from the *Fusion scriptapp* (resolve.Fusion() does
-    not expose a usable UIManager in all builds).
+    Resolve injects `fusion`/`bmd` globals only for Lua scripts, not Python, and
+    different builds expose UIManager via different objects -- so we try every
+    known source and use the first that yields a non-None UIManager.
     """
     bmd = _get_bmd_module()
     if bmd is None or not hasattr(bmd, "UIDispatcher"):
         raise RuntimeError("UIDispatcher unavailable; cannot build the UI window.")
 
-    fusion = bmd.scriptapp("Fusion") if hasattr(bmd, "scriptapp") else None
-    if fusion is None:
-        fusion = resolve.Fusion()
-    if fusion is None:
-        raise RuntimeError("Could not get the Fusion app for UIManager.")
+    import __main__
+    candidates = []
+    if hasattr(bmd, "scriptapp"):
+        candidates.append(("bmd.scriptapp('Fusion')", lambda: bmd.scriptapp("Fusion")))
+    candidates.append(("resolve.Fusion()", lambda: resolve.Fusion()))
+    candidates.append(("__main__.fusion", lambda: getattr(__main__, "fusion", None)))
+    candidates.append(("__main__.fu", lambda: getattr(__main__, "fu", None)))
 
-    ui = fusion.UIManager
-    if ui is None:
-        raise RuntimeError("fusion.UIManager is None; native UI not available in this build.")
+    for label, getter in candidates:
+        try:
+            fusion = getter()
+        except Exception as exc:
+            log(f"  UI source {label}: error {exc}")
+            continue
+        ui = getattr(fusion, "UIManager", None) if fusion is not None else None
+        log(f"  UI source {label}: fusion={'ok' if fusion else 'None'}, "
+            f"UIManager={'ok' if ui else 'None'}")
+        if ui is not None:
+            return ui, bmd.UIDispatcher(ui)
 
-    return ui, bmd.UIDispatcher(ui)
+    # Some builds expose UIManager directly on the bmd module.
+    ui = getattr(bmd, "UIManager", None)
+    if ui is not None:
+        log("  UI source bmd.UIManager: ok")
+        return ui, bmd.UIDispatcher(ui)
+
+    raise RuntimeError("No UIManager available from any source (native UI blocked in this build).")
 
 
 def get_context(app=None):
