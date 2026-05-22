@@ -11,8 +11,33 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 
 from silence import find_ffmpeg
+
+
+class Cancelled(Exception):
+    """Raised when the user stops a transcription in progress."""
+
+
+def _run(cmd, cancel=None):
+    """Run a command, killable mid-flight via a `cancel` threading.Event."""
+    if cancel is None:
+        subprocess.run(cmd, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", check=True)
+        return
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    while proc.poll() is None:
+        if cancel.is_set():
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            raise Cancelled("zrušeno uživatelem")
+        time.sleep(0.15)
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
 
 # whisper-cli ships with a few apps; check PATH then known locations.
 _WHISPER_CANDIDATES = [
@@ -44,7 +69,7 @@ def find_model():
     return None
 
 
-def extract_audio(media_path, out_wav, start_s=None, dur_s=None):
+def extract_audio(media_path, out_wav, start_s=None, dur_s=None, cancel=None):
     """Extract mono 16 kHz WAV (what whisper.cpp expects) via ffmpeg."""
     ffmpeg = find_ffmpeg() or "ffmpeg"
     cmd = [ffmpeg, "-hide_banner", "-nostats", "-y"]
@@ -53,12 +78,12 @@ def extract_audio(media_path, out_wav, start_s=None, dur_s=None):
     if dur_s is not None:
         cmd += ["-t", str(dur_s)]
     cmd += ["-i", media_path, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", out_wav]
-    subprocess.run(cmd, capture_output=True, text=True,
-                   encoding="utf-8", errors="replace", check=True)
+    _run(cmd, cancel=cancel)
     return out_wav
 
 
-def transcribe_wav(wav_path, language="cs", model=None, whisper=None, max_len=0, log=print):
+def transcribe_wav(wav_path, language="cs", model=None, whisper=None, max_len=0,
+                   log=print, cancel=None):
     """Run whisper-cli on a WAV and return a list of segments.
 
     Each segment: {"start": float_s, "end": float_s, "text": str}.
@@ -81,10 +106,9 @@ def transcribe_wav(wav_path, language="cs", model=None, whisper=None, max_len=0,
     cmd += [wav_path]
 
     log(f"Transcribing ({os.path.basename(model)}, lang={language})...")
-    # whisper-cli prints Czech (UTF-8) to stdout; Resolve's Python defaults to
-    # ascii, so decode explicitly. We read the actual result from the JSON file.
-    subprocess.run(cmd, capture_output=True, text=True,
-                   encoding="utf-8", errors="replace", check=True)
+    # We read the result from the JSON file, so stdout isn't needed; _run lets the
+    # user cancel a long transcription mid-flight.
+    _run(cmd, cancel=cancel)
 
     json_path = out_base + ".json"
     with open(json_path, "r", encoding="utf-8") as fh:
@@ -105,12 +129,12 @@ def transcribe_wav(wav_path, language="cs", model=None, whisper=None, max_len=0,
 
 
 def transcribe_media(media_path, language="cs", start_s=None, dur_s=None,
-                     max_len=0, log=print):
+                     max_len=0, log=print, cancel=None):
     """Convenience: extract audio from any media file, then transcribe."""
     with tempfile.TemporaryDirectory() as tmp:
         wav = os.path.join(tmp, "audio.wav")
-        extract_audio(media_path, wav, start_s=start_s, dur_s=dur_s)
-        return transcribe_wav(wav, language=language, max_len=max_len, log=log)
+        extract_audio(media_path, wav, start_s=start_s, dur_s=dur_s, cancel=cancel)
+        return transcribe_wav(wav, language=language, max_len=max_len, log=log, cancel=cancel)
 
 
 if __name__ == "__main__":

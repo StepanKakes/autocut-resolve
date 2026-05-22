@@ -17,7 +17,12 @@ from tkinter import ttk, scrolledtext
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import engine                       # noqa: E402
+import captions                     # noqa: E402
+import transcribe                   # noqa: E402
 from fillers import FILLER_GROUPS   # noqa: E402
+
+CASE_OPTIONS = [("beze změny", "asis"), ("První velké (věta)", "sentence"),
+                ("VŠE VELKÝM", "upper"), ("vše malé", "lower")]
 
 _GROUP_NAMES = {
     "hesitation": "Hezitace", "verbal": "Slovní vata",
@@ -67,10 +72,16 @@ def _apply_theme(root):
                     font=("Helvetica", 22, "bold"))
     style.configure("Status.TLabel", background=p["bg"], foreground=p["muted"],
                     font=("Helvetica", 12, "bold"))
-    style.configure("TCheckbutton", background=p["bg"], foreground=p["fg"])
-    style.map("TCheckbutton", background=[("active", p["bg"])],
-              foreground=[("active", p["fg"])],
-              indicatorcolor=[("selected", p["accent"]), ("!selected", p["field"])])
+    style.configure("TCheckbutton", background=p["bg"], foreground=p["fg"],
+                    indicatorbackground="#ffffff", indicatorforeground="#1b7f37",
+                    focuscolor=p["bg"], padding=2)
+    style.map(
+        "TCheckbutton",
+        background=[("active", p["bg"])],
+        foreground=[("active", p["fg"]), ("disabled", p["muted"])],
+        indicatorbackground=[("selected", "#2ea043"), ("!selected", "#ffffff"),
+                             ("disabled", p["field"])],
+        indicatorforeground=[("selected", "#ffffff")])
     style.configure("TButton", background=p["field"], foreground=p["fg"],
                     bordercolor=p["border"], focuscolor=p["bg"], padding=7, relief="flat")
     style.map("TButton", background=[("active", p["border"]), ("disabled", p["panel"])],
@@ -98,7 +109,8 @@ def run(resolve_app=None):
 
     log_q = queue.Queue()
     state = {"analysis": None, "busy": False, "words_flat": [],
-             "preview_tl": None, "live_dirty": False, "after_id": None}
+             "preview_tl": None, "live_dirty": False, "after_id": None,
+             "cancel": None}
 
     main = ttk.Frame(root, padding=16)
     main.pack(fill="both", expand=True)
@@ -157,6 +169,27 @@ def run(resolve_app=None):
     ttk.Label(custom_row, text="Vlastní slova:").pack(side="left")
     v_custom = tk.StringVar(value="")
     ttk.Entry(custom_row, textvariable=v_custom).pack(side="left", fill="x", expand=True, padx=4)
+
+    # --- Captions settings ---
+    ttk.Separator(main, orient="horizontal").pack(fill="x", pady=(8, 6))
+    ttk.Label(main, text="Titulky", font=("Helvetica", 13, "bold")).pack(anchor="w")
+    cap_row = ttk.Frame(main)
+    cap_row.pack(fill="x", pady=(2, 4))
+    ttk.Label(cap_row, text="Slov na titulek").pack(side="left")
+    v_capwords = tk.StringVar(value="0")
+    tk.Spinbox(cap_row, from_=0, to=20, textvariable=v_capwords, width=4,
+               bg=p["field"], fg=p["fg"], buttonbackground=p["field"],
+               insertbackground=p["fg"], relief="flat", highlightthickness=1,
+               highlightbackground=p["border"]).pack(side="left", padx=(4, 14))
+    v_punct = tk.BooleanVar(value=True)
+    ttk.Checkbutton(cap_row, text="Interpunkce", variable=v_punct).pack(side="left", padx=(0, 14))
+    ttk.Label(cap_row, text="Písmena").pack(side="left", padx=(0, 4))
+    v_case = ttk.Combobox(cap_row, values=[d for d, _ in CASE_OPTIONS],
+                          state="readonly", width=18)
+    v_case.current(0)
+    v_case.pack(side="left")
+    gen_cap_btn = ttk.Button(main, text="Vygenerovat titulky (na aktuální timeline)")
+    gen_cap_btn.pack(fill="x", pady=(2, 0))
 
     # ---- actions ----
     act = ttk.Frame(main)
@@ -226,6 +259,10 @@ def run(resolve_app=None):
             "repeat_threshold": fnum(v_repthr, engine.DEFAULTS["repeat_threshold"]),
             "make_captions": v_cap.get(),
             "caption_language": selected_lang(),
+            "caption_max_len": engine.DEFAULTS["caption_max_len"],
+            "caption_max_words": int(fnum(v_capwords, 0)),
+            "caption_keep_punct": v_punct.get(),
+            "caption_case": dict(CASE_OPTIONS)[v_case.get()],
         }
 
     def log(msg):
@@ -293,25 +330,57 @@ def run(resolve_app=None):
         update_summary()
 
     # ---- threaded actions ----
-    def set_busy(b):
+    def set_busy(b, analyzing=False):
         state["busy"] = b
-        analyze_btn.configure(state="disabled" if b else "normal")
+        if analyzing:
+            analyze_btn.configure(state="normal", text="⏹ Zastavit",
+                                  style="TButton", command=on_stop)
+        else:
+            analyze_btn.configure(state="disabled" if b else "normal",
+                                  text="1. Analyzovat", style="Accent.TButton",
+                                  command=on_analyze)
         apply_btn.configure(state="disabled" if (b or not state["analysis"]) else "normal")
+        gen_cap_btn.configure(state="disabled" if b else "normal")
+
+    def on_stop():
+        if state["cancel"]:
+            state["cancel"].set()
+        status.configure(text="Zastavuji…")
 
     def on_analyze():
         if state["busy"]:
             return
-        set_busy(True)
-        status.configure(text="Analyzuji… (průběh v logu)")
+        state["cancel"] = threading.Event()
+        set_busy(True, analyzing=True)
+        status.configure(text="Analyzuji… (lze zastavit)")
         log_widget.configure(state="normal"); log_widget.delete("1.0", "end")
         log_widget.configure(state="disabled")
         settings = collect_settings()
+        cancel = state["cancel"]
 
         def worker():
             try:
                 a = engine.analyze(settings, log=lambda m: log_q.put(str(m)),
-                                   resolve_app=resolve_app)
+                                   resolve_app=resolve_app, cancel=cancel)
                 log_q.put(("__ANALYSIS__", a))
+            except transcribe.Cancelled:
+                log_q.put(("__DONE__", "Zastaveno ⏹"))
+            except Exception as exc:
+                log_q.put(("__ERR__", str(exc)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_gen_captions():
+        if state["busy"]:
+            return
+        set_busy(True)
+        status.configure(text="Generuji titulky…")
+        cap_cfg = engine.caption_settings(dict(engine.DEFAULTS, **collect_settings()))
+
+        def worker():
+            try:
+                captions.run(settings=cap_cfg, log=lambda m: log_q.put(str(m)),
+                             resolve_app=resolve_app)
+                log_q.put(("__DONE__", "Titulky hotové ✅"))
             except Exception as exc:
                 log_q.put(("__ERR__", str(exc)))
         threading.Thread(target=worker, daemon=True).start()
@@ -369,6 +438,9 @@ def run(resolve_app=None):
                         if state["live_dirty"]:
                             state["live_dirty"] = False
                             schedule_live()
+                    elif kind == "__DONE__":
+                        set_busy(False)
+                        status.configure(text=val)
                     elif kind == "__ERR__":
                         set_busy(False)
                         status.configure(text=f"Chyba ❌: {val}")
@@ -381,6 +453,7 @@ def run(resolve_app=None):
 
     analyze_btn.configure(command=on_analyze)
     apply_btn.configure(command=lambda: start_apply(live=False))
+    gen_cap_btn.configure(command=on_gen_captions)
     live_cb.configure(command=on_live_toggle)
 
     # Recompute the transcript marks live whenever a filter option changes.

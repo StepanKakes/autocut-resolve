@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import captions as captions_mod                      # noqa: E402
 from resolve_connect import get_context              # noqa: E402
 from silence import detect_silences, ffmpeg_available  # noqa: E402
-from transcribe import transcribe_media              # noqa: E402
+from transcribe import transcribe_media, Cancelled  # noqa: E402
 from fillers import build_filler_set, detect_filler_intervals  # noqa: E402
 from repeats import detect_repeat_intervals           # noqa: E402
 from intervals import keep_intervals                 # noqa: E402
@@ -36,6 +36,9 @@ DEFAULTS = {
     "make_captions": False,
     "caption_language": "cs",
     "caption_max_len": 42,
+    "caption_max_words": 0,
+    "caption_keep_punct": True,
+    "caption_case": "asis",
 
     "min_keep_dur": 0.15,
     "suffix": " - AutoCut",
@@ -108,7 +111,7 @@ def redetect(analysis, settings=None):
     return n
 
 
-def analyze(settings=None, log=print, resolve_app=None):
+def analyze(settings=None, log=print, resolve_app=None, cancel=None):
     """Transcribe the timeline and tag each word as keep/cut with a reason.
 
     Returns a dict the UI can render as an editable transcript:
@@ -144,6 +147,8 @@ def analyze(settings=None, log=print, resolve_app=None):
     out_clips = []
 
     for clip in clips:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("zrušeno uživatelem")
         cs, ce = clip_source_range_s(clip)
         path = clip["path"]
 
@@ -155,7 +160,7 @@ def analyze(settings=None, log=print, resolve_app=None):
         if key not in word_cache:
             log(f"  Transcribing {os.path.basename(path)} [{cs:.1f}-{ce:.1f}s]...")
             wl = transcribe_media(path, language=cfg["caption_language"],
-                                  start_s=cs, dur_s=ce - cs, max_len=1, log=log)
+                                  start_s=cs, dur_s=ce - cs, max_len=1, log=log, cancel=cancel)
             word_cache[key] = [dict(w, start=w["start"] + cs, end=w["end"] + cs) for w in wl]
         words = [dict(w, auto_cut=False, auto_reason="", manual=None, cut=False, reason="")
                  for w in word_cache[key]]
@@ -209,11 +214,20 @@ def apply(analysis, settings=None, log=print, resolve_app=None, replace_timeline
 
     if cfg["make_captions"]:
         log("Generating captions on the new timeline...")
-        captions_mod.run(settings={"language": cfg["caption_language"],
-                                   "max_len": cfg["caption_max_len"]},
-                         log=log, resolve_app=resolve)
+        captions_mod.run(settings=caption_settings(cfg), log=log, resolve_app=resolve)
     log("AutoCut finished.")
     return current
+
+
+def caption_settings(cfg):
+    """Extract the caption-related keys for captions.run()."""
+    return {
+        "language": cfg["caption_language"],
+        "max_len": cfg["caption_max_len"],
+        "max_words": cfg["caption_max_words"],
+        "keep_punctuation": cfg["caption_keep_punct"],
+        "case": cfg["caption_case"],
+    }
 
 
 def run(settings=None, log=print, resolve_app=None):

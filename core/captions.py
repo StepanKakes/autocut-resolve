@@ -7,6 +7,7 @@ removed regions simply don't map onto any clip, and the rest shift into place.
 """
 
 import os
+import re
 import sys
 import tempfile
 
@@ -20,9 +21,27 @@ from clips import read_v1_clips               # noqa: E402
 SETTINGS = {
     "language": "cs",
     "max_len": 42,        # max characters per subtitle line
+    "max_words": 0,       # max words per subtitle (0 = no word limit)
     "max_gap": 0.7,       # start a new caption after a silence gap this long (s)
+    "keep_punctuation": True,
+    "case": "asis",       # asis | upper | lower | sentence
     "add_subtitle_track": True,
 }
+
+_PUNCT_RE = re.compile(r"[.,!?;:…\"»«„“”]+")
+
+
+def _format_text(text, keep_punctuation, case):
+    t = text.strip()
+    if not keep_punctuation:
+        t = re.sub(r"\s+", " ", _PUNCT_RE.sub("", t)).strip()
+    if case == "upper":
+        t = t.upper()
+    elif case == "lower":
+        t = t.lower()
+    elif case == "sentence" and t:
+        t = t[0].upper() + t[1:]
+    return t
 
 
 def _remap_words_to_timeline(clips, timeline_fps, tl_start_frame, language, log):
@@ -54,22 +73,28 @@ def _remap_words_to_timeline(clips, timeline_fps, tl_start_frame, language, log)
     return words_tl
 
 
-def _group_words(words, max_len, max_gap):
-    """Group consecutive words into caption segments by length and time gaps."""
+def _group_words(words, max_len, max_gap, max_words=0):
+    """Group consecutive words into caption segments by word count, line length
+    and time gaps."""
     segments = []
     cur = None
+    count = 0
     for w in words:
         if cur is None:
             cur = {"start": w["start"], "end": w["end"], "text": w["text"]}
+            count = 1
             continue
         gap = w["start"] - cur["end"]
         too_long = len(cur["text"]) + 1 + len(w["text"]) > max_len
-        if gap > max_gap or too_long:
+        too_many = max_words and count >= max_words
+        if gap > max_gap or too_long or too_many:
             segments.append(cur)
             cur = {"start": w["start"], "end": w["end"], "text": w["text"]}
+            count = 1
         else:
             cur["text"] += " " + w["text"]
             cur["end"] = w["end"]
+            count += 1
     if cur:
         segments.append(cur)
     return segments
@@ -93,7 +118,9 @@ def run(settings=None, log=print, resolve_app=None):
     words = _remap_words_to_timeline(clips, timeline_fps, tl_start, cfg["language"], log)
     if not words:
         raise RuntimeError("Transcription returned no words.")
-    segments = _group_words(words, cfg["max_len"], cfg["max_gap"])
+    segments = _group_words(words, cfg["max_len"], cfg["max_gap"], cfg["max_words"])
+    for s in segments:
+        s["text"] = _format_text(s["text"], cfg["keep_punctuation"], cfg["case"])
     log(f"Built {len(segments)} caption(s) from {len(words)} words.")
 
     srt_path = os.path.join(tempfile.mkdtemp(prefix="autocut_"), "captions.srt")
