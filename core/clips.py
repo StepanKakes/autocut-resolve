@@ -1,6 +1,47 @@
 """Shared helpers for reading timeline clips and rebuilding a cut timeline."""
 
 import os
+import shutil
+import subprocess
+
+from silence import find_ffmpeg
+
+
+def find_ffprobe():
+    found = shutil.which("ffprobe")
+    if found:
+        return found
+    ff = find_ffmpeg()
+    if ff:
+        cand = ff.replace("ffmpeg", "ffprobe")
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def probe_fps(path):
+    """True source frame rate from the media file itself (authoritative).
+
+    Resolve's GetClipProperty('FPS') can disagree with the real rate when the
+    clip is conformed to a different timeline rate, which throws word timing
+    off; the source media's own rate is what AppendToTimeline frames use.
+    """
+    fp = find_ffprobe()
+    if not fp:
+        return None
+    try:
+        out = subprocess.run(
+            [fp, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=r_frame_rate",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        ).stdout.strip()
+        if "/" in out:
+            num, den = out.split("/")
+            return float(num) / float(den)
+        return float(out)
+    except Exception:
+        return None
 
 
 def clip_property(obj, key, default=None):
@@ -32,15 +73,20 @@ def read_v1_clips(timeline, fps, video_track=1, log=print):
         if not path or not os.path.exists(path):
             log(f"  [{idx}] skipped (source not found: {path}).")
             continue
-        sfps = source_fps(mpi, fps)
+        prop_fps = source_fps(mpi, fps)
+        true_fps = probe_fps(path) or prop_fps  # media's real rate is authoritative
+        s_start = int(item.GetSourceStartFrame())
+        s_end = int(item.GetSourceEndFrame())
+        log(f"  [{idx}] {os.path.basename(path)}: srcStart={s_start} srcEnd={s_end} "
+            f"propFPS={prop_fps} probeFPS={true_fps} timelineFPS={fps}")
         clips.append({
             "index": idx,
             "item": item,
             "mpi": mpi,
             "path": path,
-            "src_fps": sfps,
-            "src_start_frame": int(item.GetSourceStartFrame()),
-            "src_end_frame": int(item.GetSourceEndFrame()),  # inclusive
+            "src_fps": true_fps,
+            "src_start_frame": s_start,
+            "src_end_frame": s_end,  # inclusive
             "rec_start_frame": int(item.GetStart()),          # position on the timeline
         })
     return clips
