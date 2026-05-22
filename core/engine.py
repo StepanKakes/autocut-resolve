@@ -56,6 +56,58 @@ def _in_any(t, intervals):
     return any(a <= t <= b for a, b in intervals)
 
 
+def _phrases_from_words(words):
+    """Group word-level entries into sentence-ish phrases for repeat detection
+    (avoids a second transcription pass)."""
+    phrases, cur = [], []
+    for w in words:
+        cur.append(w)
+        if w["text"].strip().endswith((".", "?", "!", "…")):
+            phrases.append({"start": cur[0]["start"], "end": cur[-1]["end"],
+                            "text": " ".join(x["text"] for x in cur)})
+            cur = []
+    if cur:
+        phrases.append({"start": cur[0]["start"], "end": cur[-1]["end"],
+                        "text": " ".join(x["text"] for x in cur)})
+    return phrases
+
+
+def apply_detection(words, phrases, cfg):
+    """(Re)compute each word's auto cut flag from filler/repeat settings, keeping
+    any manual override. Pure text/time ops -- no transcription -- so it's instant
+    and can run every time a filter option changes."""
+    filler_set = build_filler_set(cfg.get("filler_groups", []), cfg.get("filler_words", []))
+    fil_ints = detect_filler_intervals(words, filler_set) if filler_set else []
+    rep_ints = (detect_repeat_intervals(phrases, threshold=cfg["repeat_threshold"])
+                if cfg.get("remove_repeats") else [])
+    for w in words:
+        mid = (w["start"] + w["end"]) / 2
+        if _in_any(mid, fil_ints):
+            w["auto_cut"], w["auto_reason"] = True, "filler"
+        elif _in_any(mid, rep_ints):
+            w["auto_cut"], w["auto_reason"] = True, "repeat"
+        else:
+            w["auto_cut"], w["auto_reason"] = False, ""
+        manual = w.get("manual")
+        if manual is not None:                 # user clicked this word: respect it
+            w["cut"], w["reason"] = manual, ("manual" if manual else "")
+        else:
+            w["cut"], w["reason"] = w["auto_cut"], w["auto_reason"]
+
+
+def redetect(analysis, settings=None):
+    """Recompute cut flags across an existing analysis for new filter settings,
+    without re-transcribing. Returns the number of words now marked for removal."""
+    cfg = dict(DEFAULTS)
+    if settings:
+        cfg.update(settings)
+    n = 0
+    for entry in analysis["clips"]:
+        apply_detection(entry["words"], entry["phrases"], cfg)
+        n += sum(1 for w in entry["words"] if w["cut"])
+    return n
+
+
 def analyze(settings=None, log=print, resolve_app=None):
     """Transcribe the timeline and tag each word as keep/cut with a reason.
 
@@ -88,9 +140,7 @@ def analyze(settings=None, log=print, resolve_app=None):
         log(f"⚠️  POZOR: timeline má {len(clips)} klipů — vypadá jako už nastříhaná. "
             f"Editor patří na PŮVODNÍ (jeden souvislý klip).")
 
-    filler_set = (build_filler_set(cfg["filler_groups"], cfg["filler_words"])
-                  if cfg["remove_fillers"] else set())
-    word_cache, phrase_cache = {}, {}
+    word_cache = {}
     out_clips = []
 
     for clip in clips:
@@ -107,32 +157,18 @@ def analyze(settings=None, log=print, resolve_app=None):
             wl = transcribe_media(path, language=cfg["caption_language"],
                                   start_s=cs, dur_s=ce - cs, max_len=1, log=log)
             word_cache[key] = [dict(w, start=w["start"] + cs, end=w["end"] + cs) for w in wl]
-        words = [dict(w, cut=False, reason="") for w in word_cache[key]]
+        words = [dict(w, auto_cut=False, auto_reason="", manual=None, cut=False, reason="")
+                 for w in word_cache[key]]
+        phrases = _phrases_from_words(words)
 
-        fil_ints = detect_filler_intervals(words, filler_set) if filler_set else []
+        # Always transcribe silence info so the silence checkbox works without
+        # re-analyzing (it's cheap energy analysis, not whisper).
+        silences = detect_silences(path, cfg["noise_db"], cfg["min_silence_dur"])
 
-        rep_ints = []
-        if cfg["remove_repeats"]:
-            if key not in phrase_cache:
-                pl = transcribe_media(path, language=cfg["caption_language"],
-                                      start_s=cs, dur_s=ce - cs, max_len=0, log=log)
-                phrase_cache[key] = [dict(s, start=s["start"] + cs, end=s["end"] + cs)
-                                     for s in pl]
-            segs = phrase_cache[key]
-            rep_ints = detect_repeat_intervals(segs, threshold=cfg["repeat_threshold"])
-
-        for w in words:
-            mid = (w["start"] + w["end"]) / 2
-            if _in_any(mid, fil_ints):
-                w["cut"], w["reason"] = True, "filler"
-            elif _in_any(mid, rep_ints):
-                w["cut"], w["reason"] = True, "repeat"
-
-        silences = detect_silences(path, cfg["noise_db"], cfg["min_silence_dur"]) \
-            if cfg["cut_silences"] else []
-
-        out_clips.append({"clip": clip, "src_range": (cs, ce),
-                          "silences": silences, "words": words})
+        entry = {"clip": clip, "src_range": (cs, ce), "silences": silences,
+                 "words": words, "phrases": phrases}
+        apply_detection(words, phrases, cfg)
+        out_clips.append(entry)
 
     n_cut = sum(1 for c in out_clips for w in c["words"] if w["cut"])
     log(f"Analysis done: {sum(len(c['words']) for c in out_clips)} words, "

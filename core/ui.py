@@ -175,11 +175,25 @@ def run(resolve_app=None):
 
     def toggle(idx):
         w = state["words_flat"][idx]
-        if w["cut"]:
-            w["cut"], w["reason"] = False, ""
-        else:
-            w["cut"], w["reason"] = True, (w["reason"] or "manual")
+        new = not w["cut"]
+        w["manual"] = new          # remember user's choice across filter changes
+        w["cut"] = new
+        w["reason"] = "manual" if new else ""
         style_word(idx)
+        update_summary()
+        if v_live.get():
+            schedule_live()
+
+    def restyle_all():
+        for idx in range(len(state["words_flat"])):
+            style_word(idx)
+
+    def on_filter_change(*_):
+        # Filler/repeat options changed -> recompute marks instantly (no whisper).
+        if not state["analysis"] or state["busy"]:
+            return
+        engine.redetect(state["analysis"], collect_settings())
+        restyle_all()
         update_summary()
         if v_live.get():
             schedule_live()
@@ -288,5 +302,10 @@ def run(resolve_app=None):
     analyze_btn.configure(command=on_analyze)
     apply_btn.configure(command=lambda: start_apply(live=False))
     live_cb.configure(command=on_live_toggle)
+
+    # Recompute the transcript marks live whenever a filter option changes.
+    for _v in list(group_vars.values()) + [v_rep, v_repthr, v_custom, v_sil]:
+        _v.trace_add("write", on_filter_change)
+
     root.after(120, poll)
     root.mainloop()
