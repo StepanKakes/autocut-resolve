@@ -5,15 +5,35 @@ fast and reliable for the "auto cut silences" feature. Returns silent intervals
 in absolute seconds relative to the start of the media file.
 """
 
+import os
 import re
 import shutil
 import subprocess
 
 _SILENCE_RE = re.compile(r"silence_(start|end):\s*([\-0-9.]+)")
 
+# Resolve launches scripts with a minimal PATH that omits Homebrew, so we look
+# in the usual install locations too.
+_FFMPEG_CANDIDATES = [
+    "/opt/homebrew/bin/ffmpeg",  # Apple Silicon Homebrew
+    "/usr/local/bin/ffmpeg",     # Intel Homebrew
+    "/opt/local/bin/ffmpeg",     # MacPorts
+]
+
+
+def find_ffmpeg():
+    """Return a usable ffmpeg path, or None. Checks PATH then common locations."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    for candidate in _FFMPEG_CANDIDATES:
+        if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
 
 def ffmpeg_available():
-    return shutil.which("ffmpeg") is not None
+    return find_ffmpeg() is not None
 
 
 def detect_silences(media_path, noise_db=-30, min_silence_dur=0.5):
@@ -27,8 +47,9 @@ def detect_silences(media_path, noise_db=-30, min_silence_dur=0.5):
     Returns:
         List of (start_s, end_s) tuples in absolute seconds.
     """
+    ffmpeg = find_ffmpeg() or "ffmpeg"
     cmd = [
-        "ffmpeg", "-hide_banner", "-nostats",
+        ffmpeg, "-hide_banner", "-nostats",
         "-i", media_path,
         "-af", f"silencedetect=noise={noise_db}dB:d={min_silence_dur}",
         "-f", "null", "-",
