@@ -62,29 +62,38 @@ def get_resolve(app=None):
     return resolve
 
 
+def _get_bmd_module():
+    """Return the fusionscript/bmd module that exposes UIDispatcher/scriptapp."""
+    try:
+        import fusionscript as fs
+        if hasattr(fs, "UIDispatcher"):
+            return fs
+    except ImportError:
+        pass
+    import __main__  # last resort: injected global
+    return getattr(__main__, "bmd", None)
+
+
 def get_ui(resolve):
     """Return (UIManager, UIDispatcher) for building native windows.
 
-    Resolve injects `fusion`/`bmd` globals only for Lua scripts, not Python, so
-    we derive them from the resolve object instead.
+    Resolve injects `fusion`/`bmd` globals only for Lua scripts, not Python.
+    The UIManager must come from the *Fusion scriptapp* (resolve.Fusion() does
+    not expose a usable UIManager in all builds).
     """
-    fusion = resolve.Fusion()
-    if fusion is None:
-        raise RuntimeError("resolve.Fusion() returned None; cannot build UI.")
-    ui = fusion.UIManager
-
-    bmd = None
-    try:
-        import fusionscript as _fs
-        if hasattr(_fs, "UIDispatcher"):
-            bmd = _fs
-    except ImportError:
-        pass
-    if bmd is None:  # last resort: a global injected by the menu host
-        import __main__
-        bmd = getattr(__main__, "bmd", None)
+    bmd = _get_bmd_module()
     if bmd is None or not hasattr(bmd, "UIDispatcher"):
         raise RuntimeError("UIDispatcher unavailable; cannot build the UI window.")
+
+    fusion = bmd.scriptapp("Fusion") if hasattr(bmd, "scriptapp") else None
+    if fusion is None:
+        fusion = resolve.Fusion()
+    if fusion is None:
+        raise RuntimeError("Could not get the Fusion app for UIManager.")
+
+    ui = fusion.UIManager
+    if ui is None:
+        raise RuntimeError("fusion.UIManager is None; native UI not available in this build.")
 
     return ui, bmd.UIDispatcher(ui)
 
