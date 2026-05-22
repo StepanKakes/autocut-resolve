@@ -74,8 +74,7 @@ def run(resolve_app=None):
     v_minsil = spin(opt, "Min. ticho (s)", engine.DEFAULTS["min_silence_dur"], 0, 5, 0.05, 2, 2)
     v_spad = spin(opt, "Rezerva (s)", engine.DEFAULTS["silence_pad"], 0, 1, 0.01, 3, 2)
 
-    v_fill = tk.BooleanVar(value=engine.DEFAULTS["remove_fillers"])
-    ttk.Checkbutton(opt, text="Vycpávková slova", variable=v_fill).grid(
+    ttk.Label(opt, text="Vycpávková slova:").grid(
         row=2, column=0, columnspan=2, sticky="w")
     v_rep = tk.BooleanVar(value=engine.DEFAULTS["remove_repeats"])
     ttk.Checkbutton(opt, text="Opakované pokusy", variable=v_rep).grid(
@@ -129,14 +128,16 @@ def run(resolve_app=None):
             return default
 
     def collect_settings():
+        groups = [g for g, var in group_vars.items() if var.get()]
+        custom = [w.strip() for w in v_custom.get().split(",") if w.strip()]
         return {
             "cut_silences": v_sil.get(),
             "noise_db": fnum(v_noise, engine.DEFAULTS["noise_db"]),
             "min_silence_dur": fnum(v_minsil, engine.DEFAULTS["min_silence_dur"]),
             "silence_pad": fnum(v_spad, engine.DEFAULTS["silence_pad"]),
-            "remove_fillers": v_fill.get(),
-            "filler_groups": [g for g, var in group_vars.items() if var.get()],
-            "filler_words": [w.strip() for w in v_custom.get().split(",") if w.strip()],
+            "remove_fillers": bool(groups or custom),  # on if anything is selected
+            "filler_groups": groups,
+            "filler_words": custom,
             "remove_repeats": v_rep.get(),
             "repeat_threshold": fnum(v_repthr, engine.DEFAULTS["repeat_threshold"]),
             "make_captions": v_cap.get(),
