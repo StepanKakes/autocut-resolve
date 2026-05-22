@@ -254,8 +254,12 @@ def captions_from_analysis(analysis, settings=None, log=print, resolve_app=None)
     if settings:
         cfg.update(settings)
     resolve, project, media_pool, timeline = get_context(resolve_app)
+    total = sum(len(e["words"]) for e in analysis["clips"])
+    cut = sum(1 for e in analysis["clips"] for w in e["words"] if w["cut"])
+    log(f"Captions FROM TRANSCRIPT on '{timeline.GetName()}': "
+        f"{total} words, {cut} cut, {total - cut} kept.")
     segs = build_caption_segments(analysis, cfg)
-    log(f"Captions from transcript: {len(segs)} segment(s).")
+    log(f"-> {len(segs)} caption segment(s).")
     return captions_mod.place_segments(media_pool, timeline, segs,
                                        int(timeline.GetStartFrame()), log=log)
 
