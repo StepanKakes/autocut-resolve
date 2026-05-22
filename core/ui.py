@@ -31,35 +31,97 @@ LANGUAGES = [
     ("🇷🇺 Русский", "ru"), ("🇺🇦 Українська", "uk"), ("🇳🇱 Nederlands", "nl"),
 ]
 
-REASON_COLOR = {"filler": "#d9822b", "repeat": "#5c6bc0", "manual": "#e53935"}
+PALETTE = {
+    "bg": "#15171c", "panel": "#1e2128", "field": "#2a2e37",
+    "fg": "#e9ebef", "muted": "#9aa0aa", "accent": "#4f8cff",
+    "accent_active": "#3b78f0", "border": "#363b45",
+}
+
+REASON_COLOR = {"filler": "#f0a040", "repeat": "#6ea8fe", "manual": "#ff6b6b"}
 
 
 def _group_label(key):
     return f"{_GROUP_NAMES.get(key, key)}: {', '.join(FILLER_GROUPS[key][:4])}"
 
 
+def _apply_theme(root):
+    p = PALETTE
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")  # only theme that fully honours colours on macOS
+    except tk.TclError:
+        pass
+    root.configure(bg=p["bg"])
+    root.option_add("*TCombobox*Listbox.background", p["field"])
+    root.option_add("*TCombobox*Listbox.foreground", p["fg"])
+    root.option_add("*TCombobox*Listbox.selectBackground", p["accent"])
+
+    style.configure(".", background=p["bg"], foreground=p["fg"],
+                    fieldbackground=p["field"], bordercolor=p["border"],
+                    lightcolor=p["field"], darkcolor=p["field"],
+                    troughcolor=p["field"], font=("Helvetica", 12))
+    style.configure("TFrame", background=p["bg"])
+    style.configure("TLabel", background=p["bg"], foreground=p["fg"])
+    style.configure("Muted.TLabel", background=p["bg"], foreground=p["muted"])
+    style.configure("Title.TLabel", background=p["bg"], foreground=p["fg"],
+                    font=("Helvetica", 22, "bold"))
+    style.configure("Status.TLabel", background=p["bg"], foreground=p["muted"],
+                    font=("Helvetica", 12, "bold"))
+    style.configure("TCheckbutton", background=p["bg"], foreground=p["fg"])
+    style.map("TCheckbutton", background=[("active", p["bg"])],
+              foreground=[("active", p["fg"])],
+              indicatorcolor=[("selected", p["accent"]), ("!selected", p["field"])])
+    style.configure("TButton", background=p["field"], foreground=p["fg"],
+                    bordercolor=p["border"], focuscolor=p["bg"], padding=7, relief="flat")
+    style.map("TButton", background=[("active", p["border"]), ("disabled", p["panel"])],
+              foreground=[("disabled", p["muted"])])
+    style.configure("Accent.TButton", background=p["accent"], foreground="#ffffff",
+                    padding=7, relief="flat", font=("Helvetica", 12, "bold"))
+    style.map("Accent.TButton",
+              background=[("active", p["accent_active"]), ("disabled", p["panel"])],
+              foreground=[("disabled", p["muted"])])
+    style.configure("TCombobox", fieldbackground=p["field"], background=p["field"],
+                    foreground=p["fg"], arrowcolor=p["fg"], bordercolor=p["border"],
+                    padding=4)
+    style.map("TCombobox", fieldbackground=[("readonly", p["field"])])
+    style.configure("TEntry", fieldbackground=p["field"], foreground=p["fg"],
+                    insertcolor=p["fg"], bordercolor=p["border"], padding=4)
+    return style
+
+
 def run(resolve_app=None):
     root = tk.Tk()
     root.title("AutoCut")
-    root.geometry("560x820")
+    root.geometry("600x860")
+    _apply_theme(root)
+    p = PALETTE
 
     log_q = queue.Queue()
     state = {"analysis": None, "busy": False, "words_flat": [],
              "preview_tl": None, "live_dirty": False, "after_id": None}
 
-    main = ttk.Frame(root, padding=12)
+    main = ttk.Frame(root, padding=16)
     main.pack(fill="both", expand=True)
-    ttk.Label(main, text="AutoCut", font=("Helvetica", 18, "bold")).pack(anchor="w")
+    header = ttk.Frame(main)
+    header.pack(fill="x")
+    ttk.Label(header, text="AutoCut", style="Title.TLabel").pack(side="left")
+    ttk.Label(header, text="přepis → klikni → střih", style="Muted.TLabel").pack(
+        side="left", padx=10, pady=(10, 0))
+    ttk.Separator(main, orient="horizontal").pack(fill="x", pady=(8, 8))
 
     # ---- options grid ----
     opt = ttk.Frame(main)
     opt.pack(fill="x", pady=(6, 4))
 
     def spin(parent, label, default, frm, to, inc, r, c):
-        ttk.Label(parent, text=label).grid(row=r, column=c, sticky="w", padx=(0, 4), pady=2)
+        ttk.Label(parent, text=label).grid(row=r, column=c, sticky="w", padx=(0, 4), pady=3)
         var = tk.StringVar(value=str(default))
-        tk.Spinbox(parent, from_=frm, to=to, increment=inc, textvariable=var,
-                   width=7).grid(row=r, column=c + 1, sticky="w", pady=2)
+        tk.Spinbox(parent, from_=frm, to=to, increment=inc, textvariable=var, width=7,
+                   bg=p["field"], fg=p["fg"], buttonbackground=p["field"],
+                   insertbackground=p["fg"], relief="flat", highlightthickness=1,
+                   highlightbackground=p["border"], highlightcolor=p["accent"],
+                   readonlybackground=p["field"]).grid(
+            row=r, column=c + 1, sticky="w", pady=3)
         return var
 
     # language
@@ -99,26 +161,44 @@ def run(resolve_app=None):
     # ---- actions ----
     act = ttk.Frame(main)
     act.pack(fill="x")
-    analyze_btn = ttk.Button(act, text="1. Analyzovat")
+    analyze_btn = ttk.Button(act, text="1. Analyzovat", style="Accent.TButton")
     analyze_btn.pack(side="left")
     v_live = tk.BooleanVar(value=False)
     live_cb = ttk.Checkbutton(act, text="Živě", variable=v_live)
-    live_cb.pack(side="left", padx=8)
+    live_cb.pack(side="left", padx=10)
     v_cap = tk.BooleanVar(value=engine.DEFAULTS["make_captions"])
     ttk.Checkbutton(act, text="Titulky", variable=v_cap).pack(side="left")
-    apply_btn = ttk.Button(act, text="2. Aplikovat střih", state="disabled")
+    apply_btn = ttk.Button(act, text="2. Aplikovat střih", style="Accent.TButton",
+                           state="disabled")
     apply_btn.pack(side="right")
 
-    status = ttk.Label(main, text="Připraveno. Klikni Analyzovat.")
-    status.pack(anchor="w", pady=(4, 2))
+    status = ttk.Label(main, text="Připraveno. Klikni Analyzovat.", style="Status.TLabel")
+    status.pack(anchor="w", pady=(10, 4))
 
-    ttk.Label(main, text="Přepis (klikni na slovo = smazat/ponechat):",
-              font=("Helvetica", 10, "bold")).pack(anchor="w")
-    txt = scrolledtext.ScrolledText(main, height=14, wrap="word",
-                                    font=("Helvetica", 13), state="disabled")
-    txt.pack(fill="both", expand=True, pady=(2, 4))
+    # transcript header + colour legend
+    thead = ttk.Frame(main)
+    thead.pack(fill="x")
+    ttk.Label(thead, text="Přepis", font=("Helvetica", 13, "bold")).pack(side="left")
+    ttk.Label(thead, text="(klikni na slovo = smazat / ponechat)",
+              style="Muted.TLabel").pack(side="left", padx=6)
+    legend = ttk.Frame(main)
+    legend.pack(fill="x", pady=(2, 4))
+    for label, key in (("vata", "filler"), ("opakování", "repeat"), ("ručně", "manual")):
+        tk.Label(legend, text=f"■ {label}", fg=REASON_COLOR[key], bg=p["bg"],
+                 font=("Helvetica", 11)).pack(side="left", padx=(0, 12))
 
-    log_widget = scrolledtext.ScrolledText(main, height=5, state="disabled", wrap="word")
+    txt = scrolledtext.ScrolledText(
+        main, height=15, wrap="word", font=("Helvetica", 14),
+        state="disabled", bg=p["panel"], fg=p["fg"], insertbackground=p["accent"],
+        selectbackground=p["accent"], relief="flat", borderwidth=0,
+        padx=12, pady=10, spacing1=2, spacing3=4,
+        highlightthickness=1, highlightbackground=p["border"])
+    txt.pack(fill="both", expand=True, pady=(0, 6))
+
+    log_widget = scrolledtext.ScrolledText(
+        main, height=5, state="disabled", wrap="word", font=("Menlo", 10),
+        bg="#101216", fg=p["muted"], relief="flat", borderwidth=0,
+        padx=8, pady=6, highlightthickness=1, highlightbackground=p["border"])
     log_widget.pack(fill="x")
 
     # ---- helpers ----
