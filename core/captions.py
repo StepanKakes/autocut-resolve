@@ -25,16 +25,20 @@ SETTINGS = {
 
 
 def _pick_audio_format(project, log):
-    """Find a WAV render format/codec the project actually supports."""
+    """Find a WAV render format/codec the project actually supports.
+
+    GetRenderFormats() returns {displayName: token}; both
+    SetCurrentRenderFormatAndCodec and GetRenderCodecs expect the *token*
+    (e.g. "wav"), not the display name (e.g. "Wave").
+    """
     formats = project.GetRenderFormats() or {}
-    # formats maps {displayName: extension}
-    for name, ext in formats.items():
-        if str(ext).lower() == "wav":
-            codecs = project.GetRenderCodecs(name) or {}
-            codec = next(iter(codecs.values()), "")
-            log(f"Audio render format: '{name}' (.{ext}), codec '{codec}'.")
-            return name, codec
-    raise RuntimeError(f"No WAV render format available. Formats: {list(formats)}")
+    token = next((tok for name, tok in formats.items() if str(tok).lower() == "wav"), None)
+    if not token:
+        raise RuntimeError(f"No WAV render format available. Formats: {formats}")
+    codecs = project.GetRenderCodecs(token) or {}      # {displayName: codecToken}
+    codec = next(iter(codecs.values()), "") or "lpcm"  # Linear PCM fallback
+    log(f"Audio render format token '{token}', codec '{codec}'. Codecs: {codecs}")
+    return token, codec
 
 
 def _render_timeline_audio(resolve, project, out_dir, log):
