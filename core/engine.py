@@ -77,9 +77,16 @@ def analyze(settings=None, log=print, resolve_app=None):
                 project.GetSetting("timelineFrameRate") or 25)
     log(f"Timeline: {timeline.GetName()} @ {fps} fps")
 
+    if timeline.GetName().endswith(cfg["suffix"]):
+        log("⚠️  POZOR: analyzuješ už ořezanou timeline (" + timeline.GetName() +
+            "). Přepni na PŮVODNÍ timeline a spusť Analyzovat znovu!")
+
     clips = read_v1_clips(timeline, fps, log=log)
     if not clips:
         raise RuntimeError("No usable clips on video track 1.")
+    if len(clips) > 5:
+        log(f"⚠️  POZOR: timeline má {len(clips)} klipů — vypadá jako už nastříhaná. "
+            f"Editor patří na PŮVODNÍ (jeden souvislý klip).")
 
     filler_set = (build_filler_set(cfg["filler_groups"], cfg["filler_words"])
                   if cfg["remove_fillers"] else set())
