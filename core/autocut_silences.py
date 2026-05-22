@@ -48,15 +48,15 @@ def _source_fps(mpi, fallback):
         return float(fallback)
 
 
-def run(settings=None, log=print):
+def run(settings=None, log=print, resolve_app=None):
     cfg = dict(SETTINGS)
     if settings:
         cfg.update(settings)
 
     if not ffmpeg_available():
-        raise RuntimeError("ffmpeg not found on PATH. Install it (brew install ffmpeg).")
+        raise RuntimeError("ffmpeg not found. Install it (brew install ffmpeg).")
 
-    resolve, project, media_pool, timeline = get_context()
+    resolve, project, media_pool, timeline = get_context(resolve_app)
 
     timeline_fps = float(timeline.GetSetting("timelineFrameRate") or
                          project.GetSetting("timelineFrameRate") or 25)

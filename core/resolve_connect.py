@@ -1,8 +1,10 @@
 """Connect to a running DaVinci Resolve instance.
 
-Works both when launched from inside Resolve (Workspace > Scripts), where the
-DaVinciResolveScript module is already importable, and from an external terminal,
-where we have to point PYTHONPATH/env vars at the bundled scripting library.
+Three ways to get the Resolve app object, tried in order:
+  1. An app object handed in by the launcher (Resolve injects `resolve`/`bmd`
+     into the namespace of scripts run from Workspace > Scripts).
+  2. `import fusionscript` / `DaVinciResolveScript` -- works inside Resolve.
+  3. External terminal: point env vars at the bundled scripting library.
 """
 
 import os
@@ -13,36 +15,56 @@ _API = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer
 _LIB = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
 
 
-def get_resolve():
-    """Return the Resolve scripting app object, or raise with a clear message."""
+def _from_module():
+    """Try the bundled scripting module (works in-app and, with env, externally)."""
     try:
-        import DaVinciResolveScript as dvr  # available when run inside Resolve
+        import fusionscript as mod
     except ImportError:
-        modules = os.path.join(_API, "Modules")
-        if modules not in sys.path:
-            sys.path.append(modules)
-        os.environ.setdefault("RESOLVE_SCRIPT_API", _API)
-        os.environ.setdefault("RESOLVE_SCRIPT_LIB", _LIB)
         try:
-            import DaVinciResolveScript as dvr
-        except ImportError as exc:  # pragma: no cover - environment dependent
-            raise RuntimeError(
-                "Could not import DaVinciResolveScript. Is DaVinci Resolve installed "
-                "and the scripting API at the expected path?"
-            ) from exc
+            import DaVinciResolveScript as mod
+        except ImportError:
+            modules = os.path.join(_API, "Modules")
+            if modules not in sys.path:
+                sys.path.append(modules)
+            os.environ.setdefault("RESOLVE_SCRIPT_API", _API)
+            os.environ.setdefault("RESOLVE_SCRIPT_LIB", _LIB)
+            try:
+                import DaVinciResolveScript as mod
+            except ImportError:
+                return None
+    try:
+        return mod.scriptapp("Resolve")
+    except Exception:
+        return None
 
-    resolve = dvr.scriptapp("Resolve")
+
+def get_resolve(app=None):
+    """Return the Resolve scripting app object, or raise with a clear message.
+
+    `app` may be a pre-resolved Resolve object (or a `bmd`-like module exposing
+    `scriptapp`) captured by the launcher from the injected globals.
+    """
+    if app is not None:
+        if hasattr(app, "GetProjectManager"):
+            return app
+        if hasattr(app, "scriptapp"):  # a bmd-like module
+            got = app.scriptapp("Resolve")
+            if got is not None:
+                return got
+
+    resolve = _from_module()
     if resolve is None:
         raise RuntimeError(
-            "Resolve scripting app not reachable. Make sure DaVinci Resolve is "
-            "running and (Preferences > System > General) external scripting is enabled."
+            "Resolve scripting app not reachable. Run this from inside Resolve "
+            "(Workspace > Scripts), and check Preferences > System > General > "
+            "external scripting is set to Local."
         )
     return resolve
 
 
-def get_context():
+def get_context(app=None):
     """Return (resolve, project, media_pool, timeline). Raises if anything is missing."""
-    resolve = get_resolve()
+    resolve = get_resolve(app)
     pm = resolve.GetProjectManager()
     project = pm.GetCurrentProject()
     if project is None:
