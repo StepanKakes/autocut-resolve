@@ -27,7 +27,7 @@ def run(resolve_app=None):
     print("ui.run: connecting to Resolve...")
     resolve = get_resolve(resolve_app)
     print("ui.run: getting Fusion UIManager / dispatcher...")
-    ui, disp = get_ui(resolve)
+    ui, disp = get_ui(resolve, log=print)
     print("ui.run: building window...")
 
     def row(label, ed_id, value, hint=""):
