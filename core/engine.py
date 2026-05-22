@@ -52,6 +52,113 @@ def _adjust(intervals, shrink):
     return out
 
 
+def _in_any(t, intervals):
+    return any(a <= t <= b for a, b in intervals)
+
+
+def analyze(settings=None, log=print, resolve_app=None):
+    """Transcribe the timeline and tag each word as keep/cut with a reason.
+
+    Returns a dict the UI can render as an editable transcript:
+        {
+          "fps": float,
+          "clips": [ {"clip": clip_dict, "src_range": (cs, ce),
+                      "silences": [(s,e)...],   # source seconds
+                      "words": [ {text,start,end,cut,reason}, ... ]} ],
+        }
+    Detection is non-destructive -- nothing changes in Resolve until apply().
+    """
+    cfg = dict(DEFAULTS)
+    if settings:
+        cfg.update(settings)
+
+    resolve, project, media_pool, timeline = get_context(resolve_app)
+    fps = float(timeline.GetSetting("timelineFrameRate") or
+                project.GetSetting("timelineFrameRate") or 25)
+    log(f"Timeline: {timeline.GetName()} @ {fps} fps")
+
+    clips = read_v1_clips(timeline, fps, log=log)
+    if not clips:
+        raise RuntimeError("No usable clips on video track 1.")
+
+    filler_set = (build_filler_set(cfg["filler_groups"], cfg["filler_words"])
+                  if cfg["remove_fillers"] else set())
+    word_cache, phrase_cache = {}, {}
+    out_clips = []
+
+    for clip in clips:
+        cs, ce = clip_source_range_s(clip)
+        path = clip["path"]
+
+        if path not in word_cache:
+            log(f"  Transcribing {os.path.basename(path)}...")
+            word_cache[path] = transcribe_media(path, language=cfg["caption_language"],
+                                                max_len=1, log=log)
+        words = [dict(w, cut=False, reason="") for w in word_cache[path]
+                 if w["end"] > cs and w["start"] < ce]
+
+        fil_ints = detect_filler_intervals(words, filler_set) if filler_set else []
+
+        rep_ints = []
+        if cfg["remove_repeats"]:
+            if path not in phrase_cache:
+                phrase_cache[path] = transcribe_media(path, language=cfg["caption_language"],
+                                                      max_len=0, log=log)
+            segs = [s for s in phrase_cache[path] if s["end"] > cs and s["start"] < ce]
+            rep_ints = detect_repeat_intervals(segs, threshold=cfg["repeat_threshold"])
+
+        for w in words:
+            mid = (w["start"] + w["end"]) / 2
+            if _in_any(mid, fil_ints):
+                w["cut"], w["reason"] = True, "filler"
+            elif _in_any(mid, rep_ints):
+                w["cut"], w["reason"] = True, "repeat"
+
+        silences = detect_silences(path, cfg["noise_db"], cfg["min_silence_dur"]) \
+            if cfg["cut_silences"] else []
+
+        out_clips.append({"clip": clip, "src_range": (cs, ce),
+                          "silences": silences, "words": words})
+
+    n_cut = sum(1 for c in out_clips for w in c["words"] if w["cut"])
+    log(f"Analysis done: {sum(len(c['words']) for c in out_clips)} words, "
+        f"{n_cut} marked for removal.")
+    return {"fps": fps, "clips": out_clips}
+
+
+def apply(analysis, settings=None, log=print, resolve_app=None):
+    """Rebuild the timeline from an analysis whose word `cut` flags may have been
+    edited by the user. Cuts = flagged words (+ silences if enabled)."""
+    cfg = dict(DEFAULTS)
+    if settings:
+        cfg.update(settings)
+
+    resolve, project, media_pool, timeline = get_context(resolve_app)
+    clip_keeps = []
+    for entry in analysis["clips"]:
+        clip = entry["clip"]
+        cs, ce = entry["src_range"]
+        cuts = []
+        word_cuts = [(w["start"], w["end"]) for w in entry["words"] if w["cut"]]
+        cuts += _adjust(word_cuts, -cfg["filler_pad"])  # widen a touch to remove cleanly
+        if cfg["cut_silences"]:
+            cuts += _adjust(entry["silences"], cfg["silence_pad"])
+        keeps = keep_intervals(cuts, cs, ce, pad=0.0, min_keep_dur=cfg["min_keep_dur"])
+        removed = (ce - cs) - sum(b - a for a, b in keeps)
+        log(f"  [{clip['index']}] {len(cuts)} cut(s), {len(keeps)} keep(s), ~{removed:.1f}s removed.")
+        clip_keeps.append((clip, keeps))
+
+    current = rebuild_from_keeps(media_pool, project, timeline, clip_keeps, cfg["suffix"], log)
+
+    if cfg["make_captions"]:
+        log("Generating captions on the new timeline...")
+        captions_mod.run(settings={"language": cfg["caption_language"],
+                                   "max_len": cfg["caption_max_len"]},
+                         log=log, resolve_app=resolve)
+    log("AutoCut finished.")
+    return current
+
+
 def run(settings=None, log=print, resolve_app=None):
     cfg = dict(DEFAULTS)
     if settings:
