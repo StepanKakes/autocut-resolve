@@ -24,8 +24,11 @@ def _group_label(key):
 
 
 def run(resolve_app=None):
+    print("ui.run: connecting to Resolve...")
     resolve = get_resolve(resolve_app)
+    print("ui.run: getting Fusion UIManager / dispatcher...")
     ui, disp = get_ui(resolve)
+    print("ui.run: building window...")
 
     def row(label, ed_id, value, hint=""):
         return ui.HGroup({"Weight": 0}, [
@@ -113,6 +116,8 @@ def run(resolve_app=None):
     win.On.AutoCutWin.Close = on_close
     win.On.RunBtn.Clicked = on_run
 
+    print("ui.run: window built, showing it now.")
     win.Show()
     disp.RunLoop()
     win.Hide()
+    print("ui.run: window closed.")
