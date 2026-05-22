@@ -113,9 +113,15 @@ def run(settings=None, log=print, resolve_app=None):
     imported = media_pool.ImportMedia([srt_path]) or []
     if not imported:
         raise RuntimeError(f"ImportMedia failed for {srt_path}. Import it manually.")
-    appended = media_pool.AppendToTimeline(imported)
+
+    # SRT cue times are relative to 0, but AppendToTimeline drops clips at the
+    # END of the timeline by default. Pin the subtitle clip to the timeline's
+    # start frame so the cues line up with the footage.
+    start_frame = int(timeline.GetStartFrame())
+    clip_info = [{"mediaPoolItem": item, "recordFrame": start_frame} for item in imported]
+    appended = media_pool.AppendToTimeline(clip_info)
     n = len(appended) if isinstance(appended, list) else len(segments)
-    log(f"Done. Added {n} subtitle(s). SRT saved at: {srt_path}")
+    log(f"Done. Added {n} subtitle(s) starting at frame {start_frame}. SRT: {srt_path}")
     return srt_path
 
 
