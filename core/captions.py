@@ -24,28 +24,43 @@ SETTINGS = {
 }
 
 
-def _pick_audio_format(project, log):
-    """Find a WAV render format/codec the project actually supports.
+def _set_audio_render_format(resolve, project, log):
+    """Configure a WAV (or any audio) render. Returns True on success.
 
-    GetRenderFormats() returns {displayName: token}; both
-    SetCurrentRenderFormatAndCodec and GetRenderCodecs expect the *token*
-    (e.g. "wav"), not the display name (e.g. "Wave").
+    SetCurrentRenderFormatAndCodec only works reliably with the Deliver page
+    open, and the accepted codec token varies by build -- so we try several
+    combinations and fall back to any built-in audio render preset.
     """
+    resolve.OpenPage("deliver")
+
     formats = project.GetRenderFormats() or {}
-    token = next((tok for name, tok in formats.items() if str(tok).lower() == "wav"), None)
-    if not token:
-        raise RuntimeError(f"No WAV render format available. Formats: {formats}")
-    codecs = project.GetRenderCodecs(token) or {}      # {displayName: codecToken}
-    codec = next(iter(codecs.values()), "") or "lpcm"  # Linear PCM fallback
-    log(f"Audio render format token '{token}', codec '{codec}'. Codecs: {codecs}")
-    return token, codec
+    log(f"Render formats: {formats}")
+    wav_token = next((tok for _, tok in formats.items() if str(tok).lower() == "wav"), "wav")
+    codecs = project.GetRenderCodecs(wav_token) or {}
+    log(f"WAV codecs: {codecs}")
+
+    combos = []
+    combos += [(wav_token, c) for c in codecs.values()]
+    combos += [(wav_token, "lpcm"), (wav_token, "LinearPCM"), (wav_token, "")]
+    for fmt, codec in combos:
+        if project.SetCurrentRenderFormatAndCodec(fmt, codec):
+            log(f"Using render format '{fmt}', codec '{codec}'.")
+            return True
+
+    presets = project.GetRenderPresetList() or []
+    log(f"Format/codec failed; trying audio presets from: {presets}")
+    for preset in presets:
+        if "audio" in str(preset).lower():
+            if project.LoadRenderPreset(preset):
+                log(f"Loaded render preset '{preset}'.")
+                return True
+    return False
 
 
 def _render_timeline_audio(resolve, project, out_dir, log):
-    fmt, codec = _pick_audio_format(project, log)
+    if not _set_audio_render_format(resolve, project, log):
+        raise RuntimeError("Could not set an audio render format (see formats above).")
     project.SetCurrentRenderMode(1)  # single clip
-    if not project.SetCurrentRenderFormatAndCodec(fmt, codec):
-        raise RuntimeError(f"SetCurrentRenderFormatAndCodec({fmt}, {codec}) failed.")
     project.SetRenderSettings({
         "SelectAllFrames": True,
         "TargetDir": out_dir,
