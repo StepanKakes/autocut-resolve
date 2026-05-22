@@ -1,123 +1,150 @@
-"""Native AutoCut settings window, built with Resolve's UIManager.
+"""AutoCut settings window (Tkinter).
 
-The launcher passes in `fusion` (provides UIManager) and `bmd` (provides
-UIDispatcher), which Resolve injects into scripts run from Workspace > Scripts.
+Runs in-process from Resolve's Scripts menu, so the Resolve API works even in
+the free version (which blocks both the Fusion UIManager and external
+scripting). Heavy work runs on a worker thread; the log streams live into the
+window via a thread-safe queue polled on the Tk main thread.
 """
 
 import os
+import queue
 import sys
+import threading
+import tkinter as tk
+from tkinter import ttk, scrolledtext
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import engine                                  # noqa: E402
-from fillers import FILLER_GROUPS              # noqa: E402
-from resolve_connect import get_resolve, get_ui  # noqa: E402
+import engine                       # noqa: E402
+from fillers import FILLER_GROUPS   # noqa: E402
+
+_GROUP_NAMES = {
+    "hesitation": "Hezitace", "verbal": "Slovní vata",
+    "phrases": "Fráze", "connectors": "Spojky-vata",
+}
 
 
 def _group_label(key):
-    examples = ", ".join(FILLER_GROUPS[key][:4])
-    names = {
-        "hesitation": "Hezitace", "verbal": "Slovní vata",
-        "phrases": "Fráze", "connectors": "Spojky-vata",
-    }
-    return f"{names.get(key, key)}: {examples}"
+    return f"{_GROUP_NAMES.get(key, key)}: {', '.join(FILLER_GROUPS[key][:4])}"
 
 
 def run(resolve_app=None):
-    print("ui.run: connecting to Resolve...")
-    resolve = get_resolve(resolve_app)
-    print("ui.run: getting Fusion UIManager / dispatcher...")
-    ui, disp = get_ui(resolve, log=print)
-    print("ui.run: building window...")
+    root = tk.Tk()
+    root.title("AutoCut")
+    root.geometry("440x720")
 
-    def row(label, ed_id, value, hint=""):
-        return ui.HGroup({"Weight": 0}, [
-            ui.Label({"Text": label, "MinimumSize": [160, 0]}),
-            ui.LineEdit({"ID": ed_id, "Text": str(value), "PlaceholderText": hint}),
-        ])
+    log_q = queue.Queue()
+    running = {"flag": False}
 
-    win = disp.AddWindow({
-        "ID": "AutoCutWin",
-        "WindowTitle": "AutoCut",
-        "Geometry": [200, 150, 480, 720],
-    }, [
-        ui.VGroup([
-            ui.Label({"Text": "AutoCut", "Weight": 0,
-                      "StyleSheet": "font-size: 20px; font-weight: bold;"}),
+    pad = {"padx": 10, "pady": 3}
+    main = ttk.Frame(root, padding=12)
+    main.pack(fill="both", expand=True)
 
-            ui.CheckBox({"ID": "cb_sil", "Text": "Vyříznout ticho", "Checked": True, "Weight": 0}),
-            row("  Práh ticha (dB)", "noise", engine.DEFAULTS["noise_db"], "-30"),
-            row("  Min. délka ticha (s)", "minsil", engine.DEFAULTS["min_silence_dur"], "0.5"),
-            row("  Ponechat kolem řeči (s)", "spad", engine.DEFAULTS["silence_pad"], "0.10"),
+    ttk.Label(main, text="AutoCut", font=("Helvetica", 18, "bold")).pack(anchor="w")
 
-            ui.VGap(8),
-            ui.CheckBox({"ID": "cb_fill", "Text": "Smazat vycpávková slova", "Checked": False, "Weight": 0}),
-            ui.CheckBox({"ID": "g_hesitation", "Text": _group_label("hesitation"), "Checked": True, "Weight": 0}),
-            ui.CheckBox({"ID": "g_verbal", "Text": _group_label("verbal"), "Checked": True, "Weight": 0}),
-            ui.CheckBox({"ID": "g_phrases", "Text": _group_label("phrases"), "Checked": False, "Weight": 0}),
-            ui.CheckBox({"ID": "g_connectors", "Text": _group_label("connectors"), "Checked": False, "Weight": 0}),
-            ui.LineEdit({"ID": "custom", "PlaceholderText": "vlastní slova oddělená čárkou", "Weight": 0}),
+    # --- Silence ---
+    v_sil = tk.BooleanVar(value=engine.DEFAULTS["cut_silences"])
+    ttk.Checkbutton(main, text="Vyříznout ticho", variable=v_sil).pack(anchor="w", pady=(8, 0))
+    sil_box = ttk.Frame(main)
+    sil_box.pack(fill="x", padx=20)
 
-            ui.VGap(8),
-            ui.CheckBox({"ID": "cb_cap", "Text": "Vytvořit titulky", "Checked": False, "Weight": 0}),
-            row("  Jazyk", "lang", engine.DEFAULTS["caption_language"], "cs"),
+    def _entry(parent, label, default):
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=1)
+        ttk.Label(row, text=label, width=24).pack(side="left")
+        var = tk.StringVar(value=str(default))
+        ttk.Entry(row, textvariable=var, width=10).pack(side="left")
+        return var
 
-            ui.VGap(8),
-            ui.Button({"ID": "RunBtn", "Text": "Spustit AutoCut", "Weight": 0}),
-            ui.Label({"ID": "Status", "Text": "Připraveno.", "Weight": 0}),
-            ui.TextEdit({"ID": "Log", "ReadOnly": True, "Text": ""}),
-        ]),
-    ])
+    v_noise = _entry(sil_box, "Práh ticha (dB)", engine.DEFAULTS["noise_db"])
+    v_minsil = _entry(sil_box, "Min. délka ticha (s)", engine.DEFAULTS["min_silence_dur"])
+    v_spad = _entry(sil_box, "Ponechat kolem řeči (s)", engine.DEFAULTS["silence_pad"])
 
-    itm = win.GetItems()
+    # --- Fillers ---
+    v_fill = tk.BooleanVar(value=engine.DEFAULTS["remove_fillers"])
+    ttk.Checkbutton(main, text="Smazat vycpávková slova", variable=v_fill).pack(anchor="w", pady=(10, 0))
+    fill_box = ttk.Frame(main)
+    fill_box.pack(fill="x", padx=20)
+    group_vars = {}
+    for g in ("hesitation", "verbal", "phrases", "connectors"):
+        gv = tk.BooleanVar(value=g in engine.DEFAULTS["filler_groups"])
+        group_vars[g] = gv
+        ttk.Checkbutton(fill_box, text=_group_label(g), variable=gv).pack(anchor="w")
+    ttk.Label(fill_box, text="Vlastní slova (oddělená čárkou):").pack(anchor="w", pady=(4, 0))
+    v_custom = tk.StringVar(value="")
+    ttk.Entry(fill_box, textvariable=v_custom).pack(fill="x")
 
-    def fnum(ed_id, default):
-        try:
-            return float(itm[ed_id].Text)
-        except (ValueError, AttributeError):
-            return default
+    # --- Captions ---
+    v_cap = tk.BooleanVar(value=engine.DEFAULTS["make_captions"])
+    ttk.Checkbutton(main, text="Vytvořit titulky", variable=v_cap).pack(anchor="w", pady=(10, 0))
+    cap_box = ttk.Frame(main)
+    cap_box.pack(fill="x", padx=20)
+    v_lang = _entry(cap_box, "Jazyk", engine.DEFAULTS["caption_language"])
 
-    def ui_log(msg):
-        print(msg)
-        try:
-            itm["Log"].PlainText = (itm["Log"].PlainText + str(msg) + "\n")
-        except Exception:
-            pass
+    # --- Run + status + log ---
+    run_btn = ttk.Button(main, text="Spustit AutoCut")
+    run_btn.pack(fill="x", pady=(12, 4))
+    status = ttk.Label(main, text="Připraveno.")
+    status.pack(anchor="w")
+    log_widget = scrolledtext.ScrolledText(main, height=12, state="disabled", wrap="word")
+    log_widget.pack(fill="both", expand=True, pady=(4, 0))
 
     def collect_settings():
-        groups = [g for g in ("hesitation", "verbal", "phrases", "connectors")
-                  if itm[f"g_{g}"].Checked]
-        custom = [w.strip() for w in itm["custom"].Text.split(",") if w.strip()]
+        def fnum(var, default):
+            try:
+                return float(var.get())
+            except ValueError:
+                return default
         return {
-            "cut_silences": itm["cb_sil"].Checked,
-            "noise_db": fnum("noise", engine.DEFAULTS["noise_db"]),
-            "min_silence_dur": fnum("minsil", engine.DEFAULTS["min_silence_dur"]),
-            "silence_pad": fnum("spad", engine.DEFAULTS["silence_pad"]),
-            "remove_fillers": itm["cb_fill"].Checked,
-            "filler_groups": groups,
-            "filler_words": custom,
-            "make_captions": itm["cb_cap"].Checked,
-            "caption_language": itm["lang"].Text.strip() or "cs",
+            "cut_silences": v_sil.get(),
+            "noise_db": fnum(v_noise, engine.DEFAULTS["noise_db"]),
+            "min_silence_dur": fnum(v_minsil, engine.DEFAULTS["min_silence_dur"]),
+            "silence_pad": fnum(v_spad, engine.DEFAULTS["silence_pad"]),
+            "remove_fillers": v_fill.get(),
+            "filler_groups": [g for g, var in group_vars.items() if var.get()],
+            "filler_words": [w.strip() for w in v_custom.get().split(",") if w.strip()],
+            "make_captions": v_cap.get(),
+            "caption_language": v_lang.get().strip() or "cs",
         }
 
-    def on_run(ev):
-        itm["Status"].Text = "Běží… (průběh sleduj v konzoli)"
-        itm["Log"].PlainText = ""
+    def append_log(msg):
+        log_widget.configure(state="normal")
+        log_widget.insert("end", msg + "\n")
+        log_widget.see("end")
+        log_widget.configure(state="disabled")
+
+    def worker(settings):
         try:
-            engine.run(collect_settings(), log=ui_log, resolve_app=resolve_app)
-            itm["Status"].Text = "Hotovo ✅"
+            engine.run(settings, log=lambda m: log_q.put(str(m)), resolve_app=resolve_app)
+            log_q.put(("__DONE__", "Hotovo ✅"))
         except Exception as exc:
-            ui_log(f"CHYBA: {exc}")
-            itm["Status"].Text = "Chyba ❌ (viz log)"
+            log_q.put(("__DONE__", f"Chyba ❌: {exc}"))
 
-    def on_close(ev):
-        disp.ExitLoop()
+    def poll():
+        try:
+            while True:
+                item = log_q.get_nowait()
+                if isinstance(item, tuple) and item[0] == "__DONE__":
+                    status.configure(text=item[1])
+                    running["flag"] = False
+                    run_btn.configure(state="normal")
+                else:
+                    append_log(item)
+        except queue.Empty:
+            pass
+        root.after(120, poll)
 
-    win.On.AutoCutWin.Close = on_close
-    win.On.RunBtn.Clicked = on_run
+    def on_run():
+        if running["flag"]:
+            return
+        running["flag"] = True
+        run_btn.configure(state="disabled")
+        status.configure(text="Běží… (průběh níže)")
+        log_widget.configure(state="normal")
+        log_widget.delete("1.0", "end")
+        log_widget.configure(state="disabled")
+        threading.Thread(target=worker, args=(collect_settings(),), daemon=True).start()
 
-    print("ui.run: window built, showing it now.")
-    win.Show()
-    disp.RunLoop()
-    win.Hide()
-    print("ui.run: window closed.")
+    run_btn.configure(command=on_run)
+    root.after(120, poll)
+    root.mainloop()
