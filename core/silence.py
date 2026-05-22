@@ -50,6 +50,7 @@ def detect_silences(media_path, noise_db=-30, min_silence_dur=0.5):
     ffmpeg = find_ffmpeg() or "ffmpeg"
     cmd = [
         ffmpeg, "-hide_banner", "-nostats",
+        "-vn",                    # ignore video: we only analyse audio (much faster)
         "-i", media_path,
         "-af", f"silencedetect=noise={noise_db}dB:d={min_silence_dur}",
         "-f", "null", "-",
