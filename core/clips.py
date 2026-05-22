@@ -77,8 +77,19 @@ def read_v1_clips(timeline, fps, video_track=1, log=print):
         true_fps = probe_fps(path) or prop_fps  # media's real rate is authoritative
         s_start = int(item.GetSourceStartFrame())
         s_end = int(item.GetSourceEndFrame())
+        t_start = int(item.GetStart())
+        t_end = int(item.GetEnd())
+        try:
+            t_dur = int(item.GetDuration())
+        except Exception:
+            t_dur = t_end - t_start
+        src_span = s_end - s_start
+        tl_span = t_end - t_start
+        eff_fps = (src_span / (tl_span / fps)) if tl_span else 0
         log(f"  [{idx}] {os.path.basename(path)}: srcStart={s_start} srcEnd={s_end} "
-            f"propFPS={prop_fps} probeFPS={true_fps} timelineFPS={fps}")
+            f"(span {src_span}) | tlStart={t_start} tlEnd={t_end} dur={t_dur} (span {tl_span}) "
+            f"| propFPS={prop_fps} probeFPS={true_fps:.3f} timelineFPS={fps} "
+            f"=> effFPS={eff_fps:.3f}")
         clips.append({
             "index": idx,
             "item": item,
