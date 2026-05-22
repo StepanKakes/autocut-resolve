@@ -41,6 +41,7 @@ def read_v1_clips(timeline, fps, video_track=1, log=print):
             "src_fps": sfps,
             "src_start_frame": int(item.GetSourceStartFrame()),
             "src_end_frame": int(item.GetSourceEndFrame()),  # inclusive
+            "rec_start_frame": int(item.GetStart()),          # position on the timeline
         })
     return clips
 

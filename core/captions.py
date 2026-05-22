@@ -1,91 +1,78 @@
-"""Auto captions: transcribe the current timeline and add subtitles.
+"""Auto captions WITHOUT rendering (works in free DaVinci Resolve, any resolution).
 
-Flow: render the timeline's audio to a WAV (so caption times line up with the
-timeline, not the raw source) -> whisper.cpp transcription -> SRT -> import the
-SRT and drop it on a subtitle track.
+Instead of rendering the timeline's audio, we transcribe each clip's *source*
+file once and remap word timings onto their positions in the timeline. This
+also handles a silence/filler-cut timeline correctly: words that fell into
+removed regions simply don't map onto any clip, and the rest shift into place.
 """
 
-import glob
 import os
 import sys
 import tempfile
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from resolve_connect import get_context          # noqa: E402
-from transcribe import transcribe_wav             # noqa: E402
-from srt import write_srt                          # noqa: E402
+from resolve_connect import get_context     # noqa: E402
+from transcribe import transcribe_media      # noqa: E402
+from srt import write_srt                     # noqa: E402
+from clips import read_v1_clips               # noqa: E402
 
 SETTINGS = {
     "language": "cs",
-    "max_len": 42,        # max characters per subtitle (0 = whisper default)
+    "max_len": 42,        # max characters per subtitle line
+    "max_gap": 0.7,       # start a new caption after a silence gap this long (s)
     "add_subtitle_track": True,
 }
 
 
-def _set_audio_render_format(resolve, project, log):
-    """Configure a WAV (or any audio) render. Returns True on success.
+def _remap_words_to_timeline(clips, timeline_fps, tl_start_frame, language, log):
+    """Transcribe each source once, return words with timeline-relative times."""
+    cache = {}
+    words_tl = []
+    for clip in clips:
+        path = clip["path"]
+        if path not in cache:
+            log(f"  Transcribing {os.path.basename(path)}...")
+            cache[path] = transcribe_media(path, language=language, max_len=1, log=log)
 
-    SetCurrentRenderFormatAndCodec only works reliably with the Deliver page
-    open, and the accepted codec token varies by build -- so we try several
-    combinations and fall back to any built-in audio render preset.
-    """
-    resolve.OpenPage("deliver")
+        src_fps = clip["src_fps"]
+        src_start_s = clip["src_start_frame"] / src_fps
+        src_end_s = (clip["src_end_frame"] + 1) / src_fps
+        rec_offset_s = (clip["rec_start_frame"] - tl_start_frame) / timeline_fps
 
-    formats = project.GetRenderFormats() or {}
-    log(f"Render formats: {formats}")
-    wav_token = next((tok for _, tok in formats.items() if str(tok).lower() == "wav"), "wav")
-    codecs = project.GetRenderCodecs(wav_token) or {}
-    log(f"WAV codecs: {codecs}")
-
-    combos = []
-    combos += [(wav_token, c) for c in codecs.values()]
-    combos += [(wav_token, "lpcm"), (wav_token, "LinearPCM"), (wav_token, "")]
-    for fmt, codec in combos:
-        if project.SetCurrentRenderFormatAndCodec(fmt, codec):
-            log(f"Using render format '{fmt}', codec '{codec}'.")
-            return True
-
-    presets = project.GetRenderPresetList() or []
-    log(f"Format/codec failed; trying audio presets from: {presets}")
-    for preset in presets:
-        if "audio" in str(preset).lower():
-            if project.LoadRenderPreset(preset):
-                log(f"Loaded render preset '{preset}'.")
-                return True
-    return False
+        for w in cache[path]:
+            if w["end"] <= src_start_s or w["start"] >= src_end_s:
+                continue  # word lies outside the part of the source this clip uses
+            ws = max(w["start"], src_start_s)
+            we = min(w["end"], src_end_s)
+            words_tl.append({
+                "start": rec_offset_s + (ws - src_start_s),
+                "end": rec_offset_s + (we - src_start_s),
+                "text": w["text"],
+            })
+    words_tl.sort(key=lambda x: x["start"])
+    return words_tl
 
 
-def _render_timeline_audio(resolve, project, out_dir, log):
-    if not _set_audio_render_format(resolve, project, log):
-        raise RuntimeError("Could not set an audio render format (see formats above).")
-    project.SetCurrentRenderMode(1)  # single clip
-    project.SetRenderSettings({
-        "SelectAllFrames": True,
-        "TargetDir": out_dir,
-        "CustomName": "autocut_audio",
-        "ExportVideo": False,
-        "ExportAudio": True,
-    })
-    project.DeleteAllRenderJobs()
-    job_id = project.AddRenderJob()
-    if not job_id:
-        raise RuntimeError("AddRenderJob failed (check render settings).")
-
-    log("Rendering timeline audio...")
-    project.StartRendering(job_id)
-    while project.IsRenderingInProgress():
-        time.sleep(0.4)
-
-    status = project.GetRenderJobStatus(job_id) or {}
-    if status.get("JobStatus") not in (None, "Complete"):
-        log(f"Render status: {status}")
-
-    matches = glob.glob(os.path.join(out_dir, "autocut_audio*.wav"))
-    if not matches:
-        raise RuntimeError(f"Rendered WAV not found in {out_dir}.")
-    return matches[0]
+def _group_words(words, max_len, max_gap):
+    """Group consecutive words into caption segments by length and time gaps."""
+    segments = []
+    cur = None
+    for w in words:
+        if cur is None:
+            cur = {"start": w["start"], "end": w["end"], "text": w["text"]}
+            continue
+        gap = w["start"] - cur["end"]
+        too_long = len(cur["text"]) + 1 + len(w["text"]) > max_len
+        if gap > max_gap or too_long:
+            segments.append(cur)
+            cur = {"start": w["start"], "end": w["end"], "text": w["text"]}
+        else:
+            cur["text"] += " " + w["text"]
+            cur["end"] = w["end"]
+    if cur:
+        segments.append(cur)
+    return segments
 
 
 def run(settings=None, log=print, resolve_app=None):
@@ -94,17 +81,22 @@ def run(settings=None, log=print, resolve_app=None):
         cfg.update(settings)
 
     resolve, project, media_pool, timeline = get_context(resolve_app)
-    log(f"Timeline: {timeline.GetName()}")
+    timeline_fps = float(timeline.GetSetting("timelineFrameRate") or
+                         project.GetSetting("timelineFrameRate") or 25)
+    tl_start = int(timeline.GetStartFrame())
+    log(f"Timeline: {timeline.GetName()} @ {timeline_fps} fps")
 
-    tmp = tempfile.mkdtemp(prefix="autocut_")
-    wav = _render_timeline_audio(resolve, project, tmp, log)
+    clips = read_v1_clips(timeline, timeline_fps, log=log)
+    if not clips:
+        raise RuntimeError("No usable clips on video track 1.")
 
-    segments = transcribe_wav(wav, language=cfg["language"], max_len=cfg["max_len"], log=log)
-    if not segments:
-        raise RuntimeError("Transcription returned no segments.")
-    log(f"Transcribed {len(segments)} caption segment(s).")
+    words = _remap_words_to_timeline(clips, timeline_fps, tl_start, cfg["language"], log)
+    if not words:
+        raise RuntimeError("Transcription returned no words.")
+    segments = _group_words(words, cfg["max_len"], cfg["max_gap"])
+    log(f"Built {len(segments)} caption(s) from {len(words)} words.")
 
-    srt_path = os.path.join(tmp, "captions.srt")
+    srt_path = os.path.join(tempfile.mkdtemp(prefix="autocut_"), "captions.srt")
     write_srt(segments, srt_path)
 
     if cfg["add_subtitle_track"]:
@@ -112,16 +104,11 @@ def run(settings=None, log=print, resolve_app=None):
 
     imported = media_pool.ImportMedia([srt_path]) or []
     if not imported:
-        raise RuntimeError(f"ImportMedia failed for {srt_path}. Import it manually.")
-
-    # SRT cue times are relative to 0, but AppendToTimeline drops clips at the
-    # END of the timeline by default. Pin the subtitle clip to the timeline's
-    # start frame so the cues line up with the footage.
-    start_frame = int(timeline.GetStartFrame())
-    clip_info = [{"mediaPoolItem": item, "recordFrame": start_frame} for item in imported]
+        raise RuntimeError(f"ImportMedia failed. SRT saved at {srt_path}; import manually.")
+    clip_info = [{"mediaPoolItem": item, "recordFrame": tl_start} for item in imported]
     appended = media_pool.AppendToTimeline(clip_info)
     n = len(appended) if isinstance(appended, list) else len(segments)
-    log(f"Done. Added {n} subtitle(s) starting at frame {start_frame}. SRT: {srt_path}")
+    log(f"Done. Added {n} subtitle(s). SRT: {srt_path}")
     return srt_path
 
 
