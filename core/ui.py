@@ -74,6 +74,14 @@ def run(resolve_app=None):
     v_custom = tk.StringVar(value="")
     ttk.Entry(fill_box, textvariable=v_custom).pack(fill="x")
 
+    # --- Repeats ---
+    v_rep = tk.BooleanVar(value=engine.DEFAULTS["remove_repeats"])
+    ttk.Checkbutton(main, text="Vyříznout opakované pokusy (nechat poslední)",
+                    variable=v_rep).pack(anchor="w", pady=(10, 0))
+    rep_box = ttk.Frame(main)
+    rep_box.pack(fill="x", padx=20)
+    v_repthr = _entry(rep_box, "Podobnost (0–1)", engine.DEFAULTS["repeat_threshold"])
+
     # --- Captions ---
     v_cap = tk.BooleanVar(value=engine.DEFAULTS["make_captions"])
     ttk.Checkbutton(main, text="Vytvořit titulky", variable=v_cap).pack(anchor="w", pady=(10, 0))
@@ -103,6 +111,8 @@ def run(resolve_app=None):
             "remove_fillers": v_fill.get(),
             "filler_groups": [g for g, var in group_vars.items() if var.get()],
             "filler_words": [w.strip() for w in v_custom.get().split(",") if w.strip()],
+            "remove_repeats": v_rep.get(),
+            "repeat_threshold": fnum(v_repthr, engine.DEFAULTS["repeat_threshold"]),
             "make_captions": v_cap.get(),
             "caption_language": v_lang.get().strip() or "cs",
         }

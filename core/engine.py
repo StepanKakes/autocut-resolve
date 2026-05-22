@@ -14,6 +14,7 @@ from resolve_connect import get_context              # noqa: E402
 from silence import detect_silences, ffmpeg_available  # noqa: E402
 from transcribe import transcribe_media              # noqa: E402
 from fillers import build_filler_set, detect_filler_intervals  # noqa: E402
+from repeats import detect_repeat_intervals           # noqa: E402
 from intervals import keep_intervals                 # noqa: E402
 from clips import read_v1_clips, clip_source_range_s, rebuild_from_keeps  # noqa: E402
 
@@ -27,6 +28,10 @@ DEFAULTS = {
     "filler_groups": ["hesitation", "verbal"],
     "filler_words": [],          # extra custom words
     "filler_pad": 0.02,          # trim a touch inside each filler
+
+    "remove_repeats": False,
+    "repeat_threshold": 0.8,     # text-similarity to treat segments as re-takes
+    "repeat_pad": 0.05,
 
     "make_captions": False,
     "caption_language": "cs",
@@ -57,7 +62,7 @@ def run(settings=None, log=print, resolve_app=None):
                 project.GetSetting("timelineFrameRate") or 25)
     log(f"Timeline: {timeline.GetName()} @ {fps} fps")
 
-    do_cut = cfg["cut_silences"] or cfg["remove_fillers"]
+    do_cut = cfg["cut_silences"] or cfg["remove_fillers"] or cfg["remove_repeats"]
     current = timeline
 
     if do_cut:
@@ -71,7 +76,8 @@ def run(settings=None, log=print, resolve_app=None):
 
         filler_set = (build_filler_set(cfg["filler_groups"], cfg["filler_words"])
                       if cfg["remove_fillers"] else set())
-        words_cache = {}
+        words_cache = {}      # word-level transcription (fillers)
+        phrase_cache = {}     # phrase-level transcription (repeats)
         clip_keeps = []
 
         for clip in clips:
@@ -89,6 +95,16 @@ def run(settings=None, log=print, resolve_app=None):
                         clip["path"], language=cfg["caption_language"], max_len=1, log=log)
                 fills = detect_filler_intervals(words_cache[clip["path"]], filler_set)
                 cuts += _adjust(fills, cfg["filler_pad"])
+
+            if cfg["remove_repeats"]:
+                if clip["path"] not in phrase_cache:
+                    log(f"  Transcribing {os.path.basename(clip['path'])} for repeats...")
+                    phrase_cache[clip["path"]] = transcribe_media(
+                        clip["path"], language=cfg["caption_language"], max_len=0, log=log)
+                segs = [s for s in phrase_cache[clip["path"]]
+                        if s["end"] > cs and s["start"] < ce]
+                reps = detect_repeat_intervals(segs, threshold=cfg["repeat_threshold"])
+                cuts += _adjust(reps, -cfg["repeat_pad"])  # widen slightly to fully remove
 
             keeps = keep_intervals(cuts, cs, ce, pad=0.0, min_keep_dur=cfg["min_keep_dur"])
             removed = (ce - cs) - sum(b - a for a, b in keeps)
