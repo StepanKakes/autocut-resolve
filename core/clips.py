@@ -76,11 +76,42 @@ def rebuild_from_keeps(media_pool, project, base_name, clip_keeps, suffix, log):
     if not clip_infos:
         raise RuntimeError("Nothing left to keep -- check thresholds.")
 
-    new_name = base_name + suffix
-    new_timeline = media_pool.CreateEmptyTimeline(new_name)
+    target = base_name + suffix
+
+    # Build under a temporary unique name first: a timeline named `target` may
+    # already exist (previous run / live preview) and can't be deleted while it
+    # is the current timeline, nor can we create a duplicate name.
+    tmp = target + " ~build"
+    new_timeline = media_pool.CreateEmptyTimeline(tmp)
+    i = 2
+    while new_timeline is None and i < 50:
+        new_timeline = media_pool.CreateEmptyTimeline(f"{tmp} {i}")
+        i += 1
     if new_timeline is None:
-        raise RuntimeError(f"Could not create timeline '{new_name}'.")
+        raise RuntimeError(f"Could not create timeline for '{target}'.")
+
     project.SetCurrentTimeline(new_timeline)
     media_pool.AppendToTimeline(clip_infos)
-    log(f"Created '{new_name}' with {len(clip_infos)} segment(s).")
+
+    # Now that the new timeline is current, remove any old ones with the final
+    # name, then rename ours to it.
+    stale = _timelines_named(project, target)
+    if stale:
+        try:
+            media_pool.DeleteTimelines(stale)
+        except Exception as exc:
+            log(f"  (could not delete old '{target}': {exc})")
+    if not new_timeline.SetName(target):
+        log(f"  (kept name '{new_timeline.GetName()}'; rename to '{target}' failed)")
+
+    log(f"Created '{new_timeline.GetName()}' with {len(clip_infos)} segment(s).")
     return new_timeline
+
+
+def _timelines_named(project, name):
+    out = []
+    for idx in range(1, (project.GetTimelineCount() or 0) + 1):
+        tl = project.GetTimelineByIndex(idx)
+        if tl and tl.GetName() == name:
+            out.append(tl)
+    return out

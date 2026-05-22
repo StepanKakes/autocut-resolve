@@ -153,13 +153,9 @@ def apply(analysis, settings=None, log=print, resolve_app=None, replace_timeline
         clip_keeps.append((clip, keeps))
 
     base_name = analysis.get("timeline_name") or timeline.GetName()
+    # rebuild_from_keeps already deletes any existing timeline with the target
+    # name, so the previous preview is replaced cleanly.
     current = rebuild_from_keeps(media_pool, project, base_name, clip_keeps, cfg["suffix"], log)
-
-    if replace_timeline is not None and replace_timeline != current:
-        try:
-            media_pool.DeleteTimelines([replace_timeline])
-        except Exception as exc:
-            log(f"  (could not delete previous preview: {exc})")
 
     if cfg["make_captions"]:
         log("Generating captions on the new timeline...")
