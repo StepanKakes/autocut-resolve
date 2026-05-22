@@ -90,15 +90,20 @@ def read_v1_clips(timeline, fps, video_track=1, log=print):
             f"(span {src_span}) | tlStart={t_start} tlEnd={t_end} dur={t_dur} (span {tl_span}) "
             f"| propFPS={prop_fps} probeFPS={true_fps:.3f} timelineFPS={fps} "
             f"=> effFPS={eff_fps:.3f}")
+        # Resolve reports source frames in the *conformed* (timeline) rate, not
+        # the media's native rate. The effective fps derived from the clip's own
+        # source/timeline frame spans is what AppendToTimeline actually uses, so
+        # use it for second<->frame conversion (self-calibrating, handles retime).
+        conv_fps = eff_fps if 1 < eff_fps < 240 else fps
         clips.append({
             "index": idx,
             "item": item,
             "mpi": mpi,
             "path": path,
-            "src_fps": true_fps,
+            "src_fps": conv_fps,
             "src_start_frame": s_start,
             "src_end_frame": s_end,  # inclusive
-            "rec_start_frame": int(item.GetStart()),          # position on the timeline
+            "rec_start_frame": t_start,                       # position on the timeline
         })
     return clips
 
