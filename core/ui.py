@@ -373,13 +373,22 @@ def run(resolve_app=None):
         if state["busy"]:
             return
         set_busy(True)
-        status.configure(text="Generuji titulky…")
-        cap_cfg = engine.caption_settings(dict(engine.DEFAULTS, **collect_settings()))
+        settings = collect_settings()
+        analysis = state["analysis"]
+        reuse = analysis is not None
+        status.configure(text="Generuji titulky (z přepisu)…" if reuse
+                         else "Generuji titulky (přepisuji)…")
 
         def worker():
             try:
-                captions.run(settings=cap_cfg, log=lambda m: log_q.put(str(m)),
-                             resolve_app=resolve_app)
+                if reuse:  # use the transcript we already have -- no second whisper pass
+                    engine.captions_from_analysis(analysis, settings=settings,
+                                                  log=lambda m: log_q.put(str(m)),
+                                                  resolve_app=resolve_app)
+                else:
+                    cap_cfg = engine.caption_settings(dict(engine.DEFAULTS, **settings))
+                    captions.run(settings=cap_cfg, log=lambda m: log_q.put(str(m)),
+                                 resolve_app=resolve_app)
                 log_q.put(("__DONE__", "Titulky hotové ✅"))
             except Exception as exc:
                 log_q.put(("__ERR__", str(exc)))

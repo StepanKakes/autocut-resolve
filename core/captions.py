@@ -118,24 +118,37 @@ def run(settings=None, log=print, resolve_app=None):
     words = _remap_words_to_timeline(clips, timeline_fps, tl_start, cfg["language"], log)
     if not words:
         raise RuntimeError("Transcription returned no words.")
-    segments = _group_words(words, cfg["max_len"], cfg["max_gap"], cfg["max_words"])
-    for s in segments:
-        s["text"] = _format_text(s["text"], cfg["keep_punctuation"], cfg["case"])
+    segments = group_and_format(words, cfg)
     log(f"Built {len(segments)} caption(s) from {len(words)} words.")
+    return place_segments(media_pool, timeline, segments, tl_start,
+                          add_subtitle_track=cfg["add_subtitle_track"], log=log)
 
+
+def group_and_format(words, cfg):
+    """Group words into captions and apply punctuation/case formatting."""
+    segments = _group_words(words, cfg.get("max_len", 42), cfg.get("max_gap", 0.7),
+                            cfg.get("max_words", 0))
+    for s in segments:
+        s["text"] = _format_text(s["text"], cfg.get("keep_punctuation", True),
+                                 cfg.get("case", "asis"))
+    return segments
+
+
+def place_segments(media_pool, timeline, segments, tl_start,
+                   add_subtitle_track=True, log=print):
+    """Write segments to an SRT and drop it on a subtitle track at tl_start."""
+    if not segments:
+        raise RuntimeError("No caption segments to place.")
     srt_path = os.path.join(tempfile.mkdtemp(prefix="autocut_"), "captions.srt")
     write_srt(segments, srt_path)
-
-    if cfg["add_subtitle_track"]:
+    if add_subtitle_track:
         timeline.AddTrack("subtitle")
-
     imported = media_pool.ImportMedia([srt_path]) or []
     if not imported:
         raise RuntimeError(f"ImportMedia failed. SRT saved at {srt_path}; import manually.")
     clip_info = [{"mediaPoolItem": item, "recordFrame": tl_start} for item in imported]
-    appended = media_pool.AppendToTimeline(clip_info)
-    n = len(appended) if isinstance(appended, list) else len(segments)
-    log(f"Done. Added {n} subtitle(s). SRT: {srt_path}")
+    media_pool.AppendToTimeline(clip_info)
+    log(f"Done. Added {len(segments)} subtitle(s). SRT: {srt_path}")
     return srt_path
 
 

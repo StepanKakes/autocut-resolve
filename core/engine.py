@@ -213,10 +213,51 @@ def apply(analysis, settings=None, log=print, resolve_app=None, replace_timeline
     current = rebuild_from_keeps(media_pool, project, base_name, clip_keeps, cfg["suffix"], log)
 
     if cfg["make_captions"]:
-        log("Generating captions on the new timeline...")
-        captions_mod.run(settings=caption_settings(cfg), log=log, resolve_app=resolve)
+        log("Adding captions from the existing transcript (no re-transcription)...")
+        segs = build_caption_segments(analysis, cfg)
+        captions_mod.place_segments(media_pool, current, segs,
+                                    int(current.GetStartFrame()), log=log)
     log("AutoCut finished.")
     return current
+
+
+def build_caption_segments(analysis, cfg):
+    """Caption segments (timeline-relative seconds) built from the analysis
+    transcript -- KEPT words positioned to match the cut timeline. Reuses the
+    transcription instead of running whisper again."""
+    words_tl = []
+    t0 = 0.0  # running position on the rebuilt timeline
+    for entry in analysis["clips"]:
+        cs, ce = entry["src_range"]
+        cuts = _adjust([(w["start"], w["end"]) for w in entry["words"] if w["cut"]],
+                       -cfg["filler_pad"])
+        if cfg["cut_silences"]:
+            cuts += _adjust(entry["silences"], cfg["silence_pad"])
+        keeps = keep_intervals(cuts, cs, ce, pad=0.0, min_keep_dur=cfg["min_keep_dur"])
+        kept = [w for w in entry["words"] if not w["cut"]]
+        for a, b in keeps:
+            for w in kept:
+                mid = (w["start"] + w["end"]) / 2
+                if a <= mid <= b:
+                    words_tl.append({"start": t0 + (max(w["start"], a) - a),
+                                     "end": t0 + (min(w["end"], b) - a),
+                                     "text": w["text"]})
+            t0 += (b - a)
+    words_tl.sort(key=lambda x: x["start"])
+    return captions_mod.group_and_format(words_tl, caption_settings(cfg))
+
+
+def captions_from_analysis(analysis, settings=None, log=print, resolve_app=None):
+    """Generate captions on the current timeline straight from the analysis
+    transcript (used by the 'Vygenerovat titulky' button after an analyze)."""
+    cfg = dict(DEFAULTS)
+    if settings:
+        cfg.update(settings)
+    resolve, project, media_pool, timeline = get_context(resolve_app)
+    segs = build_caption_segments(analysis, cfg)
+    log(f"Captions from transcript: {len(segs)} segment(s).")
+    return captions_mod.place_segments(media_pool, timeline, segs,
+                                       int(timeline.GetStartFrame()), log=log)
 
 
 def caption_settings(cfg):
