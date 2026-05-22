@@ -62,6 +62,33 @@ def get_resolve(app=None):
     return resolve
 
 
+def get_ui(resolve):
+    """Return (UIManager, UIDispatcher) for building native windows.
+
+    Resolve injects `fusion`/`bmd` globals only for Lua scripts, not Python, so
+    we derive them from the resolve object instead.
+    """
+    fusion = resolve.Fusion()
+    if fusion is None:
+        raise RuntimeError("resolve.Fusion() returned None; cannot build UI.")
+    ui = fusion.UIManager
+
+    bmd = None
+    try:
+        import fusionscript as _fs
+        if hasattr(_fs, "UIDispatcher"):
+            bmd = _fs
+    except ImportError:
+        pass
+    if bmd is None:  # last resort: a global injected by the menu host
+        import __main__
+        bmd = getattr(__main__, "bmd", None)
+    if bmd is None or not hasattr(bmd, "UIDispatcher"):
+        raise RuntimeError("UIDispatcher unavailable; cannot build the UI window.")
+
+    return ui, bmd.UIDispatcher(ui)
+
+
 def get_context(app=None):
     """Return (resolve, project, media_pool, timeline). Raises if anything is missing."""
     resolve = get_resolve(app)

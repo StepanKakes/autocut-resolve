@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import engine                                  # noqa: E402
 from fillers import FILLER_GROUPS              # noqa: E402
+from resolve_connect import get_resolve, get_ui  # noqa: E402
 
 
 def _group_label(key):
@@ -22,9 +23,9 @@ def _group_label(key):
     return f"{names.get(key, key)}: {examples}"
 
 
-def run(fusion, bmd, resolve_app=None):
-    ui = fusion.UIManager
-    disp = bmd.UIDispatcher(ui)
+def run(resolve_app=None):
+    resolve = get_resolve(resolve_app)
+    ui, disp = get_ui(resolve)
 
     def row(label, ed_id, value, hint=""):
         return ui.HGroup({"Weight": 0}, [
