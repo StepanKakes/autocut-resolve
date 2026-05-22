@@ -97,21 +97,28 @@ def analyze(settings=None, log=print, resolve_app=None):
         cs, ce = clip_source_range_s(clip)
         path = clip["path"]
 
-        if path not in word_cache:
-            log(f"  Transcribing {os.path.basename(path)}...")
-            word_cache[path] = transcribe_media(path, language=cfg["caption_language"],
-                                                max_len=1, log=log)
-        words = [dict(w, cut=False, reason="") for w in word_cache[path]
-                 if w["end"] > cs and w["start"] < ce]
+        # Transcribe ONLY the source range this clip uses. Transcribing the whole
+        # (possibly very long) file lets whisper timestamps drift, which shifts
+        # cuts; a short local pass stays accurate. Times come back 0-based for the
+        # extract, so we add `cs` to get absolute source seconds.
+        key = (path, round(cs, 2), round(ce, 2))
+        if key not in word_cache:
+            log(f"  Transcribing {os.path.basename(path)} [{cs:.1f}-{ce:.1f}s]...")
+            wl = transcribe_media(path, language=cfg["caption_language"],
+                                  start_s=cs, dur_s=ce - cs, max_len=1, log=log)
+            word_cache[key] = [dict(w, start=w["start"] + cs, end=w["end"] + cs) for w in wl]
+        words = [dict(w, cut=False, reason="") for w in word_cache[key]]
 
         fil_ints = detect_filler_intervals(words, filler_set) if filler_set else []
 
         rep_ints = []
         if cfg["remove_repeats"]:
-            if path not in phrase_cache:
-                phrase_cache[path] = transcribe_media(path, language=cfg["caption_language"],
-                                                      max_len=0, log=log)
-            segs = [s for s in phrase_cache[path] if s["end"] > cs and s["start"] < ce]
+            if key not in phrase_cache:
+                pl = transcribe_media(path, language=cfg["caption_language"],
+                                      start_s=cs, dur_s=ce - cs, max_len=0, log=log)
+                phrase_cache[key] = [dict(s, start=s["start"] + cs, end=s["end"] + cs)
+                                     for s in pl]
+            segs = phrase_cache[key]
             rep_ints = detect_repeat_intervals(segs, threshold=cfg["repeat_threshold"])
 
         for w in words:
