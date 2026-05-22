@@ -55,7 +55,8 @@ def detect_silences(media_path, noise_db=-30, min_silence_dur=0.5):
         "-af", f"silencedetect=noise={noise_db}dB:d={min_silence_dur}",
         "-f", "null", "-",
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
     # silencedetect writes to stderr regardless of success.
     text = proc.stderr or ""
 

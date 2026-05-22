@@ -53,7 +53,8 @@ def extract_audio(media_path, out_wav, start_s=None, dur_s=None):
     if dur_s is not None:
         cmd += ["-t", str(dur_s)]
     cmd += ["-i", media_path, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", out_wav]
-    subprocess.run(cmd, capture_output=True, text=True, check=True)
+    subprocess.run(cmd, capture_output=True, text=True,
+                   encoding="utf-8", errors="replace", check=True)
     return out_wav
 
 
@@ -80,7 +81,10 @@ def transcribe_wav(wav_path, language="cs", model=None, whisper=None, max_len=0,
     cmd += [wav_path]
 
     log(f"Transcribing ({os.path.basename(model)}, lang={language})...")
-    subprocess.run(cmd, capture_output=True, text=True, check=True)
+    # whisper-cli prints Czech (UTF-8) to stdout; Resolve's Python defaults to
+    # ascii, so decode explicitly. We read the actual result from the JSON file.
+    subprocess.run(cmd, capture_output=True, text=True,
+                   encoding="utf-8", errors="replace", check=True)
 
     json_path = out_base + ".json"
     with open(json_path, "r", encoding="utf-8") as fh:
