@@ -826,8 +826,10 @@ def run(resolve_app=None):
                 pass
             time.sleep(0.20)
 
-    threading.Thread(target=_playhead_worker, daemon=True,
-                     name="autocut-playhead").start()
+    # Playhead karaoke disabled — even from a worker thread Resolve's API calls
+    # during playback freeze the panel. Keeping the code for later.
+    # threading.Thread(target=_playhead_worker, daemon=True,
+    #                  name="autocut-playhead").start()
 
     def _drain_playhead():
         # Pick only the latest pending index so we don't lag behind during heavy
@@ -847,6 +849,6 @@ def run(resolve_app=None):
             state["playhead_idx"] = latest
         root.after(120, _drain_playhead)
 
-    root.after(600, _drain_playhead)
+    # root.after(600, _drain_playhead)   # playhead disabled — see above
     root.after(120, poll)
     root.mainloop()
