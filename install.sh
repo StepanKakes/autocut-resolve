@@ -66,13 +66,27 @@ else
   say "python.org Python 3.12 framework present."
 fi
 
-# 7. whisper model
+# 7. whisper model -- reuse any copy already on disk before downloading 1.5 GB.
 mkdir -p "$MODEL_DIR"
-if [[ ! -f "$MODEL_PATH" ]]; then
+KNOWN_MODELS=(
+  "$MODEL_PATH"
+  "$HOME/Library/Application Support/vowen/models/ggml-large-v3-turbo.bin"
+  "$HOME/Library/Caches/whisper.cpp/ggml-large-v3-turbo.bin"
+  "/opt/homebrew/share/whisper.cpp/ggml-large-v3-turbo.bin"
+)
+FOUND_MODEL=""
+for m in "${KNOWN_MODELS[@]}"; do
+  if [[ -f "$m" ]]; then FOUND_MODEL="$m"; break; fi
+done
+
+if [[ -f "$MODEL_PATH" ]]; then
+  say "Whisper model already at $MODEL_PATH."
+elif [[ -n "$FOUND_MODEL" ]]; then
+  say "Found existing model at $FOUND_MODEL -- linking it (no re-download)."
+  ln -sf "$FOUND_MODEL" "$MODEL_PATH"
+else
   say "Downloading ggml-large-v3-turbo model (~1.5 GB, one-time)..."
   curl -fL --progress-bar -o "$MODEL_PATH" "$MODEL_URL"
-else
-  say "Whisper model already present at $MODEL_PATH."
 fi
 
 # 8. Project code
