@@ -116,10 +116,12 @@ def run(resolve_app=None):
 
     ttk.Label(opt, text="Vycpávková slova:").grid(
         row=2, column=0, columnspan=2, sticky="w")
-    v_rep = tk.BooleanVar(value=engine.DEFAULTS["remove_repeats"])
-    ttk.Checkbutton(opt, text="Opakované pokusy", variable=v_rep).grid(
+    ttk.Label(opt, text="Skupiny pokusů:").grid(
         row=3, column=0, columnspan=2, sticky="w")
-    v_repthr = spin(opt, "Podobnost", engine.DEFAULTS["repeat_threshold"], 0, 1, 0.05, 4, 2)
+    # Hidden master toggle; the "Vybrat nejlepší pokus" button flips it on demand.
+    v_rep = tk.BooleanVar(value=engine.DEFAULTS["remove_repeats"])
+    v_repthr = spin(opt, "Podobnost pokusů", engine.DEFAULTS["repeat_threshold"],
+                    0, 1, 0.05, 4, 2)
 
     # filler groups
     fill_box = ttk.Frame(main)
@@ -153,6 +155,9 @@ def run(resolve_app=None):
                           state="readonly", width=18)
     v_case.current(0)
     v_case.pack(side="left")
+    v_cap = tk.BooleanVar(value=engine.DEFAULTS["make_captions"])
+    ttk.Checkbutton(main, text="Vytvořit titulky i při Aplikovat střih",
+                    variable=v_cap).pack(anchor="w", pady=(2, 4))
     gen_cap_btn = ttk.Button(main, text="Vygenerovat titulky (na aktuální timeline)")
     gen_cap_btn.pack(fill="x", pady=(2, 6))
 
@@ -167,8 +172,6 @@ def run(resolve_app=None):
     v_live = tk.BooleanVar(value=False)
     live_cb = ttk.Checkbutton(act, text="Živě", variable=v_live)
     live_cb.pack(side="left", padx=10)
-    v_cap = tk.BooleanVar(value=engine.DEFAULTS["make_captions"])
-    ttk.Checkbutton(act, text="Titulky", variable=v_cap).pack(side="left")
     apply_btn = ttk.Button(act, text="2. Aplikovat střih", style="Accent.TButton",
                            state="disabled")
     apply_btn.pack(side="right")
@@ -476,6 +479,16 @@ def run(resolve_app=None):
                         state["analysis"] = val
                         render_transcript(val)
                         set_busy(False)
+                        groups = sum(1 for e in val["clips"]
+                                     for g in e.get("take_groups", []) if len(g) >= 2)
+                        if groups:
+                            takes_btn.configure(
+                                text=f"🎬 Vybrat nejlepší pokus ({groups} skupin)",
+                                state="normal")
+                        else:
+                            takes_btn.configure(
+                                text="🎬 Žádné skupiny pokusů nenalezeny",
+                                state="disabled")
                     elif kind == "__APPLIED__":
                         state["preview_tl"] = val
                         set_busy(False)
