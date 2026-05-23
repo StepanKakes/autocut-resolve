@@ -776,59 +776,77 @@ def run(resolve_app=None):
         mcp_status.configure(text="💬 MCP server startuje…")
         root.after(300, _probe_mcp)
 
-    # Karaoke playhead: read Resolve's current timecode periodically and
-    # highlight the word being spoken right now. Only runs when the timeline
-    # currently open in Resolve matches the analysed one.
+    # Karaoke playhead: a background thread reads Resolve's playhead position
+    # (those API calls can block during playback), and posts the resulting word
+    # index through a queue. The Tk main thread only repaints the tag, so the
+    # panel never freezes while the timeline is playing.
     state["playhead_idx"] = None
-    state["playhead_warned"] = False
+    playhead_q = queue.Queue()
+    playhead_stop = threading.Event()
 
-    def update_playhead():
-        a = state.get("analysis")
-        words = state.get("words_flat") or []
-        if a and resolve_app is not None and words:
+    def _playhead_worker():
+        import time
+        while not playhead_stop.is_set():
             try:
+                a = state.get("analysis")
+                words = state.get("words_flat") or []
+                if not a or resolve_app is None or not words:
+                    time.sleep(0.4)
+                    continue
                 pm = resolve_app.GetProjectManager()
                 proj = pm.GetCurrentProject() if pm else None
                 tl = proj.GetCurrentTimeline() if proj else None
-                # Pick which set of word positions matches the timeline that's
-                # currently open in Resolve: the analyzed original, or the cut
-                # result produced by the most recent Apply.
-                if tl and tl.GetName() == a.get("timeline_name"):
+                if tl is None:
+                    time.sleep(0.4)
+                    continue
+                name = tl.GetName()
+                if name == a.get("timeline_name"):
                     fps = a.get("fps", 25)
                     tl_start = a.get("timeline_start_frame", 0)
                     s_key, e_key = "tl_start", "tl_end"
-                elif tl and tl.GetName() == a.get("cut_timeline_name"):
+                elif name == a.get("cut_timeline_name"):
                     fps = a.get("cut_fps", a.get("fps", 25))
                     tl_start = a.get("cut_timeline_start_frame", 0)
                     s_key, e_key = "cut_tl_start", "cut_tl_end"
                 else:
-                    if state["playhead_idx"] is not None:
-                        txt.tag_remove("playhead", "1.0", "end")
-                        state["playhead_idx"] = None
-                    root.after(180, update_playhead)
-                    return
-
+                    playhead_q.put(None)
+                    time.sleep(0.4)
+                    continue
                 cur = _tc_to_seconds(tl.GetCurrentTimecode(), fps) - tl_start / fps
-                new_idx = None
+                idx = None
                 for i, w in enumerate(words):
                     ts, te = w.get(s_key), w.get(e_key)
                     if ts is None or te is None:
                         continue
                     if ts <= cur <= te + 0.05:
-                        new_idx = i
+                        idx = i
                         break
-                if new_idx != state["playhead_idx"]:
-                    txt.tag_remove("playhead", "1.0", "end")
-                    if new_idx is not None:
-                        r = txt.tag_ranges(f"w{new_idx}")
-                        if r:
-                            txt.tag_add("playhead", r[0], r[1])
-                            txt.see(r[0])
-                    state["playhead_idx"] = new_idx
+                playhead_q.put(idx)
             except Exception:
                 pass
-        root.after(180, update_playhead)
+            time.sleep(0.20)
 
-    root.after(500, update_playhead)
+    threading.Thread(target=_playhead_worker, daemon=True,
+                     name="autocut-playhead").start()
+
+    def _drain_playhead():
+        # Pick only the latest pending index so we don't lag behind during heavy
+        # bursts (Tk repaint stays fast).
+        latest = "__none__"
+        try:
+            while True:
+                latest = playhead_q.get_nowait()
+        except queue.Empty:
+            pass
+        if latest != "__none__" and latest != state["playhead_idx"]:
+            txt.tag_remove("playhead", "1.0", "end")
+            if latest is not None:
+                r = txt.tag_ranges(f"w{latest}")
+                if r:
+                    txt.tag_add("playhead", r[0], r[1])
+            state["playhead_idx"] = latest
+        root.after(120, _drain_playhead)
+
+    root.after(600, _drain_playhead)
     root.after(120, poll)
     root.mainloop()
