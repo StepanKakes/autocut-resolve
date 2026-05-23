@@ -46,8 +46,9 @@ _WHISPER_CANDIDATES = [
     "/usr/local/bin/whisper-cli",
 ]
 
-# ggml models already on disk.
+# ggml models already on disk (install.sh drops one in ~/.autocut/models).
 _MODEL_CANDIDATES = [
+    os.path.expanduser("~/.autocut/models/ggml-large-v3-turbo.bin"),
     os.path.expanduser("~/Library/Application Support/vowen/models/ggml-large-v3-turbo.bin"),
 ]
 
