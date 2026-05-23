@@ -306,6 +306,7 @@ def run(resolve_app=None):
     def open_takes_window():
         if not state["analysis"]:
             return
+        v_rep.set(True)  # ensure un-selected takes actually get cut
         # Collect all take groups across clips and only show real groups (2+ takes).
         groups = []
         for entry in state["analysis"]["clips"]:
