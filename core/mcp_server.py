@@ -223,13 +223,36 @@ def build_server(bridge: AutoCutBridge):
     return mcp
 
 
-def serve_in_thread(bridge: AutoCutBridge):
-    """Start the MCP server on http://127.0.0.1:7741/mcp in a daemon thread."""
+def serve_in_thread(bridge: AutoCutBridge, host="127.0.0.1", port=7741):
+    """Start the MCP server on http://127.0.0.1:7741/mcp in a daemon thread.
+
+    FastMCP's own `run()` calls uvicorn.run -> Server.serve, which by default
+    tries to install signal handlers. Signal handler registration only works on
+    the *main* thread, so doing it from our worker thread raises silently and
+    nothing ends up binding the port. We side-step that by building the ASGI
+    app ourselves and running uvicorn with signal-handler install disabled.
+    """
+    import asyncio
+    import uvicorn
+
     server = build_server(bridge)
+
+    # Reach into FastMCP for the streamable-HTTP ASGI app. The public method
+    # was added in recent mcp versions; fall back to the private one if needed.
+    if hasattr(server, "streamable_http_app"):
+        app = server.streamable_http_app()
+    else:
+        app = server._mcp_server.streamable_http_app()  # type: ignore[attr-defined]
+
+    config = uvicorn.Config(app, host=host, port=port,
+                            log_level="warning", access_log=False)
+    uv_server = uvicorn.Server(config)
+    # Block uvicorn from touching signals -- it would crash on a non-main thread.
+    uv_server.install_signal_handlers = lambda: None  # type: ignore[assignment]
 
     def _run():
         try:
-            server.run(transport="streamable-http")
+            asyncio.run(uv_server.serve())
         except Exception as exc:
             print(f"MCP server stopped: {exc}")
 

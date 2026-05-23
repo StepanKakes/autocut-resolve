@@ -722,10 +722,27 @@ def run(resolve_app=None):
     # panel. It's a daemon thread, so it dies when Resolve / the panel closes.
     try:
         mcp_server.serve_in_thread(bridge)
-        mcp_status.configure(
-            text="💬 MCP server běží na http://127.0.0.1:7741/mcp")
     except Exception as exc:
         mcp_status.configure(text=f"💬 MCP server nelze spustit: {exc}")
+    else:
+        import socket
+
+        def _probe_mcp(retries=25):
+            try:
+                with socket.create_connection(("127.0.0.1", 7741), timeout=0.2):
+                    mcp_status.configure(
+                        text="💬 MCP server běží na http://127.0.0.1:7741/mcp")
+                    return
+            except OSError:
+                pass
+            if retries > 0:
+                root.after(200, lambda: _probe_mcp(retries - 1))
+            else:
+                mcp_status.configure(
+                    text="💬 MCP server se nepřipojil — viz Resolve konzole (Py3)")
+
+        mcp_status.configure(text="💬 MCP server startuje…")
+        root.after(300, _probe_mcp)
 
     root.after(120, poll)
     root.mainloop()
