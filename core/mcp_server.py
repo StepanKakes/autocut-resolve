@@ -244,8 +244,12 @@ def serve_in_thread(bridge: AutoCutBridge, host="127.0.0.1", port=7741):
     else:
         app = server._mcp_server.streamable_http_app()  # type: ignore[attr-defined]
 
+    # log_config=None tells uvicorn NOT to install its default logging config
+    # (which tries to set up colour formatters that crash under Resolve's
+    # Python with "Unable to configure formatter 'default'").
     config = uvicorn.Config(app, host=host, port=port,
-                            log_level="warning", access_log=False)
+                            log_level="warning", access_log=False,
+                            log_config=None)
     uv_server = uvicorn.Server(config)
     # Block uvicorn from touching signals -- it would crash on a non-main thread.
     uv_server.install_signal_handlers = lambda: None  # type: ignore[assignment]
