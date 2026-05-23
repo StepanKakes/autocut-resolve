@@ -231,6 +231,39 @@ def apply(analysis, settings=None, log=print, resolve_app=None, replace_timeline
     # name, so the previous preview is replaced cleanly.
     current = rebuild_from_keeps(media_pool, project, base_name, clip_keeps, cfg["suffix"], log)
 
+    # Recompute timeline positions for KEPT words on the freshly built cut
+    # timeline, so the karaoke playhead keeps tracking after Resolve switches
+    # to it. Cut words get None (they're not on the new timeline).
+    t0 = 0.0
+    for (_clip, keeps), entry in zip(clip_keeps, analysis["clips"]):
+        for w in entry["words"]:
+            if w["cut"]:
+                w["cut_tl_start"] = w["cut_tl_end"] = None
+                continue
+            mid = (w["start"] + w["end"]) / 2
+            t_acc = t0
+            placed = False
+            for a, b in keeps:
+                if a <= mid <= b:
+                    ws = max(w["start"], a)
+                    we = min(w["end"], b)
+                    w["cut_tl_start"] = t_acc + (ws - a)
+                    w["cut_tl_end"] = t_acc + (we - a)
+                    placed = True
+                    break
+                t_acc += (b - a)
+            if not placed:
+                w["cut_tl_start"] = w["cut_tl_end"] = None
+        for a, b in keeps:
+            t0 += (b - a)
+    try:
+        analysis["cut_timeline_name"] = current.GetName()
+        analysis["cut_timeline_start_frame"] = int(current.GetStartFrame())
+        analysis["cut_fps"] = float(current.GetSetting("timelineFrameRate")
+                                    or analysis.get("fps", 25))
+    except Exception as exc:
+        log(f"  (could not capture cut timeline meta: {exc})")
+
     if cfg["make_captions"]:
         log("Adding captions from the existing transcript (no re-transcription)...")
         segs = build_caption_segments(analysis, cfg)

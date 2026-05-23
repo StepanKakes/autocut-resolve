@@ -790,31 +790,41 @@ def run(resolve_app=None):
                 pm = resolve_app.GetProjectManager()
                 proj = pm.GetCurrentProject() if pm else None
                 tl = proj.GetCurrentTimeline() if proj else None
+                # Pick which set of word positions matches the timeline that's
+                # currently open in Resolve: the analyzed original, or the cut
+                # result produced by the most recent Apply.
                 if tl and tl.GetName() == a.get("timeline_name"):
                     fps = a.get("fps", 25)
                     tl_start = a.get("timeline_start_frame", 0)
-                    cur = _tc_to_seconds(tl.GetCurrentTimecode(), fps) - tl_start / fps
-                    new_idx = None
-                    for i, w in enumerate(words):
-                        ts, te = w.get("tl_start"), w.get("tl_end")
-                        if ts is None or te is None:
-                            continue
-                        if ts <= cur <= te + 0.05:
-                            new_idx = i
-                            break
-                    if new_idx != state["playhead_idx"]:
-                        txt.tag_remove("playhead", "1.0", "end")
-                        if new_idx is not None:
-                            r = txt.tag_ranges(f"w{new_idx}")
-                            if r:
-                                txt.tag_add("playhead", r[0], r[1])
-                                txt.see(r[0])
-                        state["playhead_idx"] = new_idx
+                    s_key, e_key = "tl_start", "tl_end"
+                elif tl and tl.GetName() == a.get("cut_timeline_name"):
+                    fps = a.get("cut_fps", a.get("fps", 25))
+                    tl_start = a.get("cut_timeline_start_frame", 0)
+                    s_key, e_key = "cut_tl_start", "cut_tl_end"
                 else:
-                    # different timeline open -> clear any leftover highlight
                     if state["playhead_idx"] is not None:
                         txt.tag_remove("playhead", "1.0", "end")
                         state["playhead_idx"] = None
+                    root.after(180, update_playhead)
+                    return
+
+                cur = _tc_to_seconds(tl.GetCurrentTimecode(), fps) - tl_start / fps
+                new_idx = None
+                for i, w in enumerate(words):
+                    ts, te = w.get(s_key), w.get(e_key)
+                    if ts is None or te is None:
+                        continue
+                    if ts <= cur <= te + 0.05:
+                        new_idx = i
+                        break
+                if new_idx != state["playhead_idx"]:
+                    txt.tag_remove("playhead", "1.0", "end")
+                    if new_idx is not None:
+                        r = txt.tag_ranges(f"w{new_idx}")
+                        if r:
+                            txt.tag_add("playhead", r[0], r[1])
+                            txt.see(r[0])
+                    state["playhead_idx"] = new_idx
             except Exception:
                 pass
         root.after(180, update_playhead)
