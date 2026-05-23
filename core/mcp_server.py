@@ -13,7 +13,10 @@ After analyzing inside the panel, just open `claude` and chat:
     "udělej titulky velkýma písmenama, max 3 slova"
 """
 
+import contextlib
 import datetime
+import os
+import sys
 import threading
 import traceback
 
@@ -258,22 +261,28 @@ def serve_in_thread(bridge: AutoCutBridge, host="127.0.0.1", port=7741):
         pass
     _logf(f"serve_in_thread called, host={host} port={port}")
 
-    try:
-        server = build_server(bridge)
-        _logf("FastMCP server built")
-        if hasattr(server, "streamable_http_app"):
-            app = server.streamable_http_app()
-            _logf("got app from streamable_http_app()")
-        else:
-            app = server._mcp_server.streamable_http_app()  # type: ignore[attr-defined]
-            _logf("got app from _mcp_server.streamable_http_app()")
+    # Resolve replaces sys.stdout/stderr with a wrapper that raises SystemError
+    # when uvicorn/FastMCP internals try to write to it. Route any stray writes
+    # to our log file instead, just for the duration of MCP server work.
+    log_sink = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
 
-        config = uvicorn.Config(app, host=host, port=port,
-                                log_level="warning", access_log=False,
-                                log_config=None)
-        uv_server = uvicorn.Server(config)
-        uv_server.install_signal_handlers = lambda: None  # type: ignore[assignment]
-        _logf("uvicorn server configured")
+    try:
+        with contextlib.redirect_stdout(log_sink), contextlib.redirect_stderr(log_sink):
+            server = build_server(bridge)
+            _logf("FastMCP server built")
+            if hasattr(server, "streamable_http_app"):
+                app = server.streamable_http_app()
+                _logf("got app from streamable_http_app()")
+            else:
+                app = server._mcp_server.streamable_http_app()  # type: ignore[attr-defined]
+                _logf("got app from _mcp_server.streamable_http_app()")
+
+            config = uvicorn.Config(app, host=host, port=port,
+                                    log_level="warning", access_log=False,
+                                    log_config=None)
+            uv_server = uvicorn.Server(config)
+            uv_server.install_signal_handlers = lambda: None  # type: ignore[assignment]
+            _logf("uvicorn server configured")
     except Exception as exc:
         status["error"] = f"{type(exc).__name__}: {exc}"
         _logf(f"SETUP FAILED: {traceback.format_exc()}")
@@ -281,8 +290,10 @@ def serve_in_thread(bridge: AutoCutBridge, host="127.0.0.1", port=7741):
 
     def _run():
         _logf("worker thread entered, calling asyncio.run(serve)")
+        # Same redirection inside the thread -- uvicorn keeps writing while serving.
         try:
-            asyncio.run(uv_server.serve())
+            with contextlib.redirect_stdout(log_sink), contextlib.redirect_stderr(log_sink):
+                asyncio.run(uv_server.serve())
             _logf("uvicorn.serve() returned cleanly")
         except Exception as exc:
             status["error"] = f"{type(exc).__name__}: {exc}"
