@@ -89,11 +89,12 @@ else
   curl -fL --progress-bar -o "$MODEL_PATH" "$MODEL_URL"
 fi
 
-# 8. Project code
+# 8. Project code (core + docs so the in-app Help can show its image)
 say "Copying AutoCut code to $APP_DIR..."
 mkdir -p "$APP_DIR"
-rm -rf "$APP_DIR/core"
+rm -rf "$APP_DIR/core" "$APP_DIR/docs"
 cp -R "$SCRIPT_DIR/core" "$APP_DIR/core"
+cp -R "$SCRIPT_DIR/docs" "$APP_DIR/docs"
 
 # 9. Resolve Scripts launcher
 say "Installing launcher into Resolve Scripts > Utility..."

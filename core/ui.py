@@ -122,27 +122,55 @@ BARVY V PŘEPISU
 """
 
 
+_HELP_IMG = (os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+             + "/docs/ui-guide-help.png")
+
+
 def _open_help_window(root, p):
     win = tk.Toplevel(root)
     win.title("AutoCut — nápověda")
-    win.geometry("720x640")
+    win.geometry("780x900")
     win.configure(bg=p["bg"])
 
-    body = scrolledtext.ScrolledText(
-        win, wrap="word", font=("Helvetica", 12),
-        bg=p["panel"], fg=p["fg"], insertbackground=p["fg"],
-        relief="flat", borderwidth=0, padx=14, pady=12,
-        highlightthickness=1, highlightbackground=p["border"])
+    # Scrollable content: annotated image on top, plain-text guide below.
+    canvas = tk.Canvas(win, bg=p["bg"], highlightthickness=0)
+    sb = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+    inner = ttk.Frame(canvas)
+    inner.bind("<Configure>",
+               lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.create_window((0, 0), window=inner, anchor="nw")
+    canvas.configure(yscrollcommand=sb.set)
+    canvas.pack(side="left", fill="both", expand=True, padx=(12, 0), pady=12)
+    sb.pack(side="right", fill="y", pady=12, padx=(0, 12))
+
+    # Annotated screenshot (Tk 8.6 reads PNG natively; no Pillow at runtime).
+    if os.path.exists(_HELP_IMG):
+        try:
+            img = tk.PhotoImage(file=_HELP_IMG)
+            lbl = ttk.Label(inner, image=img, background=p["bg"])
+            lbl.image = img            # keep a reference so it isn't GC'd
+            lbl.pack(pady=(0, 8))
+        except Exception as exc:
+            ttk.Label(inner, text=f"(obrázek nelze načíst: {exc})",
+                      style="Muted.TLabel").pack(anchor="w")
+
+    body = tk.Text(inner, wrap="word", font=("Helvetica", 12),
+                   bg=p["panel"], fg=p["fg"], relief="flat", borderwidth=0,
+                   padx=14, pady=12, height=30, width=72,
+                   highlightthickness=1, highlightbackground=p["border"])
     body.insert("1.0", HELP_TEXT)
     body.configure(state="disabled")
-    body.pack(fill="both", expand=True, padx=12, pady=(12, 8))
+    body.pack(fill="x", pady=(0, 8))
 
-    btn_row = ttk.Frame(win)
-    btn_row.pack(fill="x", padx=12, pady=(0, 12))
+    # Bottom action row (outside the scrolling area would be nicer, but keeping
+    # everything in `inner` is simpler and works fine when the user scrolls).
+    btn_row = ttk.Frame(inner)
+    btn_row.pack(fill="x", pady=(0, 4))
     import webbrowser
 
     def _open_github():
-        webbrowser.open("https://github.com/StepanKakes/autocut-resolve/blob/main/docs/USAGE.md")
+        webbrowser.open(
+            "https://github.com/StepanKakes/autocut-resolve/blob/main/docs/USAGE.md")
 
     ttk.Button(btn_row, text="Otevřít kompletní návod na GitHubu",
                command=_open_github).pack(side="left")

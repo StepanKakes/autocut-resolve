@@ -8,6 +8,8 @@ from PIL import Image, ImageDraw, ImageFont
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "ui-raw.png"
 OUT = HERE / "ui-guide.png"
+OUT_SMALL = HERE / "ui-guide-help.png"   # smaller version embedded in the app
+SMALL_WIDTH = 720
 
 # (number, x, y) where to put a circle on the UI; coordinates are in the
 # original 1424x2000 screenshot.
@@ -60,6 +62,12 @@ def main():
 
     img.save(OUT, "PNG", optimize=True)
     print(f"wrote {OUT}")
+
+    # smaller copy for the in-app Help window (Tk PhotoImage loads PNG directly)
+    ratio = SMALL_WIDTH / img.width
+    small = img.resize((SMALL_WIDTH, int(img.height * ratio)), Image.LANCZOS)
+    small.save(OUT_SMALL, "PNG", optimize=True)
+    print(f"wrote {OUT_SMALL}  ({small.size[0]}x{small.size[1]})")
 
 
 if __name__ == "__main__":
