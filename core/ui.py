@@ -50,48 +50,18 @@ def _group_label(key):
 
 
 def _apply_theme(root):
+    """Use the native macOS aqua theme (checkboxes/buttons render natively and
+    inherit dark mode). Only the tk widgets we control directly (Text, Spinbox)
+    get explicit dark colours below."""
     p = PALETTE
     style = ttk.Style(root)
-    try:
-        style.theme_use("clam")  # only theme that fully honours colours on macOS
-    except tk.TclError:
-        pass
+    # Aqua is the macOS default; styling chrome colours is mostly ignored, but
+    # we can still set fonts/padding and named-style fonts.
     root.configure(bg=p["bg"])
-    root.option_add("*TCombobox*Listbox.background", p["field"])
-    root.option_add("*TCombobox*Listbox.foreground", p["fg"])
-    root.option_add("*TCombobox*Listbox.selectBackground", p["accent"])
-
-    style.configure(".", background=p["bg"], foreground=p["fg"],
-                    fieldbackground=p["field"], bordercolor=p["border"],
-                    lightcolor=p["field"], darkcolor=p["field"],
-                    troughcolor=p["field"], font=("Helvetica", 12))
-    style.configure("TFrame", background=p["bg"])
-    style.configure("TLabel", background=p["bg"], foreground=p["fg"])
-    style.configure("Muted.TLabel", background=p["bg"], foreground=p["muted"])
-    style.configure("Title.TLabel", background=p["bg"], foreground=p["fg"],
-                    font=("Helvetica", 22, "bold"))
-    style.configure("Status.TLabel", background=p["bg"], foreground=p["muted"],
-                    font=("Helvetica", 12, "bold"))
-    style.configure("TCheckbutton", background=p["bg"], foreground=p["fg"],
-                    focuscolor=p["bg"], padding=2)
-    style.map("TCheckbutton",
-              background=[("active", p["bg"])],
-              foreground=[("active", p["fg"]), ("disabled", p["muted"])])
-    style.configure("TButton", background=p["field"], foreground=p["fg"],
-                    bordercolor=p["border"], focuscolor=p["bg"], padding=7, relief="flat")
-    style.map("TButton", background=[("active", p["border"]), ("disabled", p["panel"])],
-              foreground=[("disabled", p["muted"])])
-    style.configure("Accent.TButton", background=p["accent"], foreground="#ffffff",
-                    padding=7, relief="flat", font=("Helvetica", 12, "bold"))
-    style.map("Accent.TButton",
-              background=[("active", p["accent_active"]), ("disabled", p["panel"])],
-              foreground=[("disabled", p["muted"])])
-    style.configure("TCombobox", fieldbackground=p["field"], background=p["field"],
-                    foreground=p["fg"], arrowcolor=p["fg"], bordercolor=p["border"],
-                    padding=4)
-    style.map("TCombobox", fieldbackground=[("readonly", p["field"])])
-    style.configure("TEntry", fieldbackground=p["field"], foreground=p["fg"],
-                    insertcolor=p["fg"], bordercolor=p["border"], padding=4)
+    style.configure("Title.TLabel", font=("Helvetica", 20, "bold"))
+    style.configure("Muted.TLabel", foreground=p["muted"])
+    style.configure("Status.TLabel", font=("Helvetica", 12, "bold"))
+    style.configure("Accent.TButton", padding=6, font=("Helvetica", 12, "bold"))
     return style
 
 
