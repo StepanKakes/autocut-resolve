@@ -14,7 +14,7 @@ from resolve_connect import get_context              # noqa: E402
 from silence import detect_silences, ffmpeg_available  # noqa: E402
 from transcribe import transcribe_media, Cancelled  # noqa: E402
 from fillers import build_filler_set, detect_filler_intervals  # noqa: E402
-from repeats import detect_repeat_intervals           # noqa: E402
+from repeats import detect_repeat_intervals, detect_take_groups  # noqa: E402
 from intervals import keep_intervals                 # noqa: E402
 from clips import read_v1_clips, clip_source_range_s, rebuild_from_keeps  # noqa: E402
 
@@ -75,20 +75,28 @@ def _phrases_from_words(words):
     return phrases
 
 
-def apply_detection(words, phrases, cfg):
-    """(Re)compute each word's auto cut flag from filler/repeat settings, keeping
-    any manual override. Pure text/time ops -- no transcription -- so it's instant
-    and can run every time a filter option changes."""
+def apply_detection(words, phrases, take_groups, cfg):
+    """(Re)compute each word's auto cut flag from filler + take-selection settings,
+    keeping any manual override. Pure text/time ops -- instant; runs every time
+    a filter option changes or the user picks a different take.
+    """
     filler_set = build_filler_set(cfg.get("filler_groups", []), cfg.get("filler_words", []))
     fil_ints = detect_filler_intervals(words, filler_set) if filler_set else []
-    rep_ints = (detect_repeat_intervals(phrases, threshold=cfg["repeat_threshold"])
-                if cfg.get("remove_repeats") else [])
+
+    # Cut intervals from take selection: every UN-selected take in every group.
+    take_cuts = []
+    if cfg.get("remove_repeats") and take_groups:
+        for group in take_groups:
+            for take in group:
+                if not take["selected"]:
+                    take_cuts.append((take["start"], take["end"]))
+
     for w in words:
         mid = (w["start"] + w["end"]) / 2
         if _in_any(mid, fil_ints):
             w["auto_cut"], w["auto_reason"] = True, "filler"
-        elif _in_any(mid, rep_ints):
-            w["auto_cut"], w["auto_reason"] = True, "repeat"
+        elif _in_any(mid, take_cuts):
+            w["auto_cut"], w["auto_reason"] = True, "take"
         else:
             w["auto_cut"], w["auto_reason"] = False, ""
         manual = w.get("manual")
@@ -106,7 +114,8 @@ def redetect(analysis, settings=None):
         cfg.update(settings)
     n = 0
     for entry in analysis["clips"]:
-        apply_detection(entry["words"], entry["phrases"], cfg)
+        apply_detection(entry["words"], entry["phrases"],
+                        entry.get("take_groups", []), cfg)
         n += sum(1 for w in entry["words"] if w["cut"])
     return n
 
@@ -165,14 +174,15 @@ def analyze(settings=None, log=print, resolve_app=None, cancel=None):
         words = [dict(w, auto_cut=False, auto_reason="", manual=None, cut=False, reason="")
                  for w in word_cache[key]]
         phrases = _phrases_from_words(words)
+        take_groups = detect_take_groups(phrases, threshold=cfg["repeat_threshold"])
 
         # Always transcribe silence info so the silence checkbox works without
         # re-analyzing (it's cheap energy analysis, not whisper).
         silences = detect_silences(path, cfg["noise_db"], cfg["min_silence_dur"])
 
         entry = {"clip": clip, "src_range": (cs, ce), "silences": silences,
-                 "words": words, "phrases": phrases}
-        apply_detection(words, phrases, cfg)
+                 "words": words, "phrases": phrases, "take_groups": take_groups}
+        apply_detection(words, phrases, take_groups, cfg)
         out_clips.append(entry)
 
     n_cut = sum(1 for c in out_clips for w in c["words"] if w["cut"])

@@ -42,7 +42,7 @@ PALETTE = {
     "accent_active": "#3b78f0", "border": "#363b45",
 }
 
-REASON_COLOR = {"filler": "#f0a040", "repeat": "#6ea8fe", "manual": "#ff6b6b"}
+REASON_COLOR = {"filler": "#f0a040", "take": "#6ea8fe", "manual": "#ff6b6b"}
 
 
 def _group_label(key):
@@ -73,15 +73,10 @@ def _apply_theme(root):
     style.configure("Status.TLabel", background=p["bg"], foreground=p["muted"],
                     font=("Helvetica", 12, "bold"))
     style.configure("TCheckbutton", background=p["bg"], foreground=p["fg"],
-                    indicatorbackground="#ffffff", indicatorforeground="#1b7f37",
                     focuscolor=p["bg"], padding=2)
-    style.map(
-        "TCheckbutton",
-        background=[("active", p["bg"])],
-        foreground=[("active", p["fg"]), ("disabled", p["muted"])],
-        indicatorbackground=[("selected", "#2ea043"), ("!selected", "#ffffff"),
-                             ("disabled", p["field"])],
-        indicatorforeground=[("selected", "#ffffff")])
+    style.map("TCheckbutton",
+              background=[("active", p["bg"])],
+              foreground=[("active", p["fg"]), ("disabled", p["muted"])])
     style.configure("TButton", background=p["field"], foreground=p["fg"],
                     bordercolor=p["border"], focuscolor=p["bg"], padding=7, relief="flat")
     style.map("TButton", background=[("active", p["border"]), ("disabled", p["panel"])],
@@ -189,7 +184,10 @@ def run(resolve_app=None):
     v_case.current(0)
     v_case.pack(side="left")
     gen_cap_btn = ttk.Button(main, text="Vygenerovat titulky (na aktuální timeline)")
-    gen_cap_btn.pack(fill="x", pady=(2, 0))
+    gen_cap_btn.pack(fill="x", pady=(2, 6))
+
+    takes_btn = ttk.Button(main, text="🎬 Vybrat nejlepší pokus ze skupin", state="disabled")
+    takes_btn.pack(fill="x", pady=(0, 0))
 
     # ---- actions ----
     act = ttk.Frame(main)
@@ -216,7 +214,7 @@ def run(resolve_app=None):
               style="Muted.TLabel").pack(side="left", padx=6)
     legend = ttk.Frame(main)
     legend.pack(fill="x", pady=(2, 4))
-    for label, key in (("vata", "filler"), ("opakování", "repeat"), ("ručně", "manual")):
+    for label, key in (("vata", "filler"), ("jiný pokus", "take"), ("ručně", "manual")):
         tk.Label(legend, text=f"■ {label}", fg=REASON_COLOR[key], bg=p["bg"],
                  font=("Helvetica", 11)).pack(side="left", padx=(0, 12))
 
@@ -305,6 +303,72 @@ def run(resolve_app=None):
         for idx in range(len(state["words_flat"])):
             style_word(idx)
 
+    def open_takes_window():
+        if not state["analysis"]:
+            return
+        # Collect all take groups across clips and only show real groups (2+ takes).
+        groups = []
+        for entry in state["analysis"]["clips"]:
+            groups.extend(entry.get("take_groups", []) or [])
+        groups = [g for g in groups if len(g) >= 2]
+
+        win = tk.Toplevel(root)
+        win.title("Skupiny pokusů — vyber nejlepší")
+        win.geometry("760x560")
+        win.configure(bg=p["bg"])
+
+        ttk.Label(win, text="Vyber pokus, který chceš ponechat",
+                  style="Title.TLabel", padding=(12, 10, 12, 4)).pack(anchor="w")
+        ttk.Label(win, text="Ostatní pokusy ve skupině se v přepisu označí jako "
+                            "‚jiný pokus‘ (modré, přeškrtnuté) a vystřihnou se.",
+                  style="Muted.TLabel", padding=(12, 0, 12, 8)).pack(anchor="w")
+
+        if not groups:
+            ttk.Label(win, text="Žádné skupiny pokusů nenalezeny.",
+                      padding=12).pack(anchor="w")
+            ttk.Button(win, text="Zavřít", command=win.destroy).pack(pady=12)
+            return
+
+        # Scrollable area.
+        outer = ttk.Frame(win)
+        outer.pack(fill="both", expand=True, padx=12)
+        canvas = tk.Canvas(outer, bg=p["bg"], highlightthickness=0)
+        sb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind("<Configure>",
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        # Build one block per group.
+        for gi, group in enumerate(groups, 1):
+            frm = ttk.LabelFrame(inner, text=f"Skupina {gi}  ·  {len(group)} pokusů",
+                                 padding=8)
+            frm.pack(fill="x", pady=6, padx=4)
+            cur = next((i for i, t in enumerate(group) if t["selected"]), len(group) - 1)
+            var = tk.IntVar(value=cur)
+
+            def make_handler(grp, v):
+                def _on_change():
+                    sel = v.get()
+                    for i, t in enumerate(grp):
+                        t["selected"] = (i == sel)
+                    on_filter_change()  # recompute cuts + restyle + live
+                return _on_change
+
+            handler = make_handler(group, var)
+            for i, take in enumerate(group):
+                dur = take["end"] - take["start"]
+                txt = take["text"].strip()
+                if len(txt) > 110:
+                    txt = txt[:110] + "…"
+                ttk.Radiobutton(frm, text=f"Pokus {i + 1}  ·  {dur:0.1f}s\n{txt}",
+                                variable=var, value=i, command=handler).pack(anchor="w", pady=2)
+
+        ttk.Button(win, text="Zavřít", command=win.destroy).pack(pady=10)
+
     def on_filter_change(*_):
         # Filler/repeat options changed -> recompute marks instantly (no whisper).
         if not state["analysis"] or state["busy"]:
@@ -341,6 +405,7 @@ def run(resolve_app=None):
                                   command=on_analyze)
         apply_btn.configure(state="disabled" if (b or not state["analysis"]) else "normal")
         gen_cap_btn.configure(state="disabled" if b else "normal")
+        takes_btn.configure(state="disabled" if (b or not state["analysis"]) else "normal")
 
     def on_stop():
         if state["cancel"]:
@@ -463,6 +528,7 @@ def run(resolve_app=None):
     analyze_btn.configure(command=on_analyze)
     apply_btn.configure(command=lambda: start_apply(live=False))
     gen_cap_btn.configure(command=on_gen_captions)
+    takes_btn.configure(command=open_takes_window)
     live_cb.configure(command=on_live_toggle)
 
     # Recompute the transcript marks live whenever a filter option changes.

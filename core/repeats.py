@@ -20,6 +20,36 @@ def _similarity(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
+def detect_take_groups(segments, threshold=0.8, min_words=3):
+    """Find groups of consecutive similar takes (multiple attempts at the same
+    sentence). Each group is a list of takes; the last one is selected by
+    default. Used so the user can pick the best attempt per group instead of
+    auto-cutting all-but-last.
+    """
+    norms = [_norm_text(s["text"]) for s in segments]
+    groups = []
+    n = len(segments)
+    i = 0
+    while i < n:
+        j = i
+        while (j + 1 < n
+               and len(norms[j].split()) >= min_words
+               and _similarity(norms[j], norms[j + 1]) >= threshold):
+            j += 1
+        if j > i:
+            takes = [{
+                "start": segments[k]["start"],
+                "end": segments[k]["end"],
+                "text": segments[k]["text"],
+                "selected": (k == j),  # default: keep the last attempt
+            } for k in range(i, j + 1)]
+            groups.append(takes)
+            i = j + 1
+        else:
+            i += 1
+    return groups
+
+
 def detect_repeat_intervals(segments, threshold=0.8, min_words=3):
     """Find intervals of failed/earlier takes to cut.
 
