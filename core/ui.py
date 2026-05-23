@@ -642,7 +642,9 @@ def run(resolve_app=None):
         state["after_id"] = None
         if state["busy"]:
             state["live_dirty"] = True   # rebuild again once the current one finishes
+            log("Živě: busy, počkám až doběhne předchozí")
         else:
+            log("Živě: spouštím přestavbu timeline")
             start_apply(live=True)
 
     def on_live_toggle():
@@ -681,8 +683,12 @@ def run(resolve_app=None):
                         # Claude touched the analysis -- redraw + summary.
                         restyle_all()
                         update_summary()
+                        log(f"💬 Claude: {val}")
                         if v_live.get():
+                            log("   Živě zaplé → plánuji přestavbu za 0.7 s")
                             schedule_live()
+                        else:
+                            log("   (Živě vypnuté — klikni Aplikovat střih ručně)")
                     elif kind == "__AI__":
                         restyle_all()
                         update_summary()
