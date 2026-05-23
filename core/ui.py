@@ -721,13 +721,21 @@ def run(resolve_app=None):
     # Start the MCP server so Claude (in another terminal) can chat with the
     # panel. It's a daemon thread, so it dies when Resolve / the panel closes.
     try:
-        mcp_server.serve_in_thread(bridge)
+        mcp_state = mcp_server.serve_in_thread(bridge)
     except Exception as exc:
         mcp_status.configure(text=f"💬 MCP server nelze spustit: {exc}")
+        mcp_state = None
     else:
         import socket
 
         def _probe_mcp(retries=25):
+            if mcp_state["error"]:
+                hint = ""
+                if "in use" in mcp_state["error"].lower():
+                    hint = "  (port obsazen — zavři Resolve a otevři znovu)"
+                mcp_status.configure(
+                    text=f"💬 MCP chyba: {mcp_state['error']}{hint}")
+                return
             try:
                 with socket.create_connection(("127.0.0.1", 7741), timeout=0.2):
                     mcp_status.configure(

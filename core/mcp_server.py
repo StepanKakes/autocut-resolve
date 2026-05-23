@@ -226,40 +226,37 @@ def build_server(bridge: AutoCutBridge):
 def serve_in_thread(bridge: AutoCutBridge, host="127.0.0.1", port=7741):
     """Start the MCP server on http://127.0.0.1:7741/mcp in a daemon thread.
 
-    FastMCP's own `run()` calls uvicorn.run -> Server.serve, which by default
-    tries to install signal handlers. Signal handler registration only works on
-    the *main* thread, so doing it from our worker thread raises silently and
-    nothing ends up binding the port. We side-step that by building the ASGI
-    app ourselves and running uvicorn with signal-handler install disabled.
+    FastMCP's own `run()` would call uvicorn with signal handlers + default
+    logging, both of which crash under Resolve's Python in a worker thread. We
+    build the ASGI app and run uvicorn ourselves with both disabled.
+
+    Returns a mutable dict the caller polls: {"error": str|None, "url": str}.
     """
     import asyncio
     import uvicorn
 
-    server = build_server(bridge)
+    status = {"error": None, "url": f"http://{host}:{port}/mcp"}
 
-    # Reach into FastMCP for the streamable-HTTP ASGI app. The public method
-    # was added in recent mcp versions; fall back to the private one if needed.
+    server = build_server(bridge)
     if hasattr(server, "streamable_http_app"):
         app = server.streamable_http_app()
     else:
         app = server._mcp_server.streamable_http_app()  # type: ignore[attr-defined]
 
-    # log_config=None tells uvicorn NOT to install its default logging config
-    # (which tries to set up colour formatters that crash under Resolve's
-    # Python with "Unable to configure formatter 'default'").
     config = uvicorn.Config(app, host=host, port=port,
                             log_level="warning", access_log=False,
                             log_config=None)
     uv_server = uvicorn.Server(config)
-    # Block uvicorn from touching signals -- it would crash on a non-main thread.
     uv_server.install_signal_handlers = lambda: None  # type: ignore[assignment]
 
     def _run():
+        print(f"[autocut-mcp] starting on {host}:{port}…", flush=True)
         try:
             asyncio.run(uv_server.serve())
         except Exception as exc:
-            print(f"MCP server stopped: {exc}")
+            status["error"] = f"{type(exc).__name__}: {exc}"
+            print(f"[autocut-mcp] thread crashed: {exc!r}", flush=True)
 
     t = threading.Thread(target=_run, daemon=True, name="autocut-mcp")
     t.start()
-    return t
+    return status
