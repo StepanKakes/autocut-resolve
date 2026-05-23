@@ -13,9 +13,23 @@ After analyzing inside the panel, just open `claude` and chat:
     "udělej titulky velkýma písmenama, max 3 slova"
 """
 
+import datetime
 import threading
+import traceback
 
 from mcp.server.fastmcp import FastMCP
+
+LOG_FILE = "/tmp/autocut-mcp.log"
+
+
+def _logf(msg):
+    """Append to /tmp/autocut-mcp.log so we can see what happened even when
+    Resolve swallows thread prints. Best-effort, never throws."""
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')}  {msg}\n")
+    except Exception:
+        pass
 
 
 class AutoCutBridge:
@@ -237,26 +251,44 @@ def serve_in_thread(bridge: AutoCutBridge, host="127.0.0.1", port=7741):
 
     status = {"error": None, "url": f"http://{host}:{port}/mcp"}
 
-    server = build_server(bridge)
-    if hasattr(server, "streamable_http_app"):
-        app = server.streamable_http_app()
-    else:
-        app = server._mcp_server.streamable_http_app()  # type: ignore[attr-defined]
+    # Clear the log on each (re)start to avoid old noise.
+    try:
+        open(LOG_FILE, "w").close()
+    except Exception:
+        pass
+    _logf(f"serve_in_thread called, host={host} port={port}")
 
-    config = uvicorn.Config(app, host=host, port=port,
-                            log_level="warning", access_log=False,
-                            log_config=None)
-    uv_server = uvicorn.Server(config)
-    uv_server.install_signal_handlers = lambda: None  # type: ignore[assignment]
+    try:
+        server = build_server(bridge)
+        _logf("FastMCP server built")
+        if hasattr(server, "streamable_http_app"):
+            app = server.streamable_http_app()
+            _logf("got app from streamable_http_app()")
+        else:
+            app = server._mcp_server.streamable_http_app()  # type: ignore[attr-defined]
+            _logf("got app from _mcp_server.streamable_http_app()")
+
+        config = uvicorn.Config(app, host=host, port=port,
+                                log_level="warning", access_log=False,
+                                log_config=None)
+        uv_server = uvicorn.Server(config)
+        uv_server.install_signal_handlers = lambda: None  # type: ignore[assignment]
+        _logf("uvicorn server configured")
+    except Exception as exc:
+        status["error"] = f"{type(exc).__name__}: {exc}"
+        _logf(f"SETUP FAILED: {traceback.format_exc()}")
+        return status
 
     def _run():
-        print(f"[autocut-mcp] starting on {host}:{port}…", flush=True)
+        _logf("worker thread entered, calling asyncio.run(serve)")
         try:
             asyncio.run(uv_server.serve())
+            _logf("uvicorn.serve() returned cleanly")
         except Exception as exc:
             status["error"] = f"{type(exc).__name__}: {exc}"
-            print(f"[autocut-mcp] thread crashed: {exc!r}", flush=True)
+            _logf(f"WORKER CRASHED: {traceback.format_exc()}")
 
     t = threading.Thread(target=_run, daemon=True, name="autocut-mcp")
     t.start()
+    _logf(f"thread started: name={t.name} alive={t.is_alive()}")
     return status
