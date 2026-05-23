@@ -20,6 +20,7 @@ import engine                       # noqa: E402
 import captions                     # noqa: E402
 import transcribe                   # noqa: E402
 import ai                           # noqa: E402
+import mcp_server                   # noqa: E402
 from fillers import FILLER_GROUPS   # noqa: E402
 
 CASE_OPTIONS = [("beze změny", "asis"), ("První velké (věta)", "sentence"),
@@ -206,6 +207,11 @@ def run(resolve_app=None):
              "preview_tl": None, "live_dirty": False, "after_id": None,
              "cancel": None}
 
+    # Bridge to the MCP server (Claude side); the server is started below once
+    # we know `resolve_app` is captured and we have a settings_provider.
+    bridge = mcp_server.AutoCutBridge()
+    bridge.resolve_app = resolve_app
+
     main = ttk.Frame(root, padding=16)
     main.pack(fill="both", expand=True)
     header = ttk.Frame(main)
@@ -295,8 +301,26 @@ def run(resolve_app=None):
 
     takes_btn = ttk.Button(main, text="🎬 Vybrat nejlepší pokus ze skupin", state="disabled")
     takes_btn.pack(fill="x", pady=(0, 4))
-    ai_btn = ttk.Button(main, text="🤖 Nech sestříhat AI (Claude)", state="disabled")
-    ai_btn.pack(fill="x", pady=(0, 0))
+    ai_btn = ttk.Button(main, text="🤖 Nech sestříhat AI (Claude, jednorázově)",
+                        state="disabled")
+    ai_btn.pack(fill="x", pady=(0, 4))
+
+    mcp_row = ttk.Frame(main)
+    mcp_row.pack(fill="x")
+    mcp_status = ttk.Label(mcp_row,
+                           text="💬 MCP pro Claude: připojuje se…",
+                           style="Muted.TLabel")
+    mcp_status.pack(side="left")
+
+    def _copy_mcp_cmd():
+        cmd = "claude mcp add autocut --transport http http://127.0.0.1:7741/mcp"
+        root.clipboard_clear()
+        root.clipboard_append(cmd)
+        mcp_status.configure(text=f"💬 Zkopírováno do schránky: vlož do Terminálu")
+
+    mcp_btn = ttk.Button(mcp_row, text="Kopírovat `claude mcp add`",
+                         command=_copy_mcp_cmd)
+    mcp_btn.pack(side="right")
 
     # ---- actions ----
     act = ttk.Frame(main)
@@ -369,6 +393,11 @@ def run(resolve_app=None):
             "caption_keep_punct": v_punct.get(),
             "caption_case": dict(CASE_OPTIONS)[v_case.get()],
         }
+
+    # Hook up the MCP bridge now that collect_settings exists.
+    bridge.settings_provider = collect_settings
+    bridge.log = lambda m: log_q.put(str(m))
+    bridge.on_change_callbacks.append(lambda reason: log_q.put(("__MCP_SYNC__", reason)))
 
     def log(msg):
         log_widget.configure(state="normal")
@@ -628,6 +657,7 @@ def run(resolve_app=None):
                     kind, val = item
                     if kind == "__ANALYSIS__":
                         state["analysis"] = val
+                        bridge.analysis = val
                         render_transcript(val)
                         set_busy(False)
                         groups = sum(1 for e in val["clips"]
@@ -646,6 +676,12 @@ def run(resolve_app=None):
                         status.configure(text="Hotovo ✅")
                         if state["live_dirty"]:
                             state["live_dirty"] = False
+                            schedule_live()
+                    elif kind == "__MCP_SYNC__":
+                        # Claude touched the analysis -- redraw + summary.
+                        restyle_all()
+                        update_summary()
+                        if v_live.get():
                             schedule_live()
                     elif kind == "__AI__":
                         restyle_all()
@@ -681,6 +717,15 @@ def run(resolve_app=None):
     # Recompute the transcript marks live whenever a filter option changes.
     for _v in list(group_vars.values()) + [v_rep, v_repthr, v_custom, v_sil]:
         _v.trace_add("write", on_filter_change)
+
+    # Start the MCP server so Claude (in another terminal) can chat with the
+    # panel. It's a daemon thread, so it dies when Resolve / the panel closes.
+    try:
+        mcp_server.serve_in_thread(bridge)
+        mcp_status.configure(
+            text="💬 MCP server běží na http://127.0.0.1:7741/mcp")
+    except Exception as exc:
+        mcp_status.configure(text=f"💬 MCP server nelze spustit: {exc}")
 
     root.after(120, poll)
     root.mainloop()

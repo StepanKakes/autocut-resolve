@@ -66,6 +66,13 @@ else
   say "python.org Python 3.12 framework present."
 fi
 
+# 6b. Python deps for the in-process MCP server (Claude chat bridge)
+PY_BIN="$PY_FW/bin/python3"
+if ! "$PY_BIN" -c "import mcp" >/dev/null 2>&1; then
+  say "Installing 'mcp' Python SDK (for the Claude chat bridge)..."
+  "$PY_BIN" -m pip install --quiet 'mcp[cli]' fastmcp
+fi
+
 # 7. whisper model -- reuse any copy already on disk before downloading 1.5 GB.
 mkdir -p "$MODEL_DIR"
 KNOWN_MODELS=(
@@ -109,7 +116,8 @@ if PROJECT_CORE not in sys.path:
     sys.path.insert(0, PROJECT_CORE)
 
 for _name in ("ui", "engine", "captions", "transcribe", "srt", "silence",
-              "fillers", "repeats", "intervals", "clips", "resolve_connect", "ai"):
+              "fillers", "repeats", "intervals", "clips", "resolve_connect",
+              "ai", "mcp_server"):
     sys.modules.pop(_name, None)
 
 import ui  # noqa: E402
