@@ -103,6 +103,26 @@ rm -rf "$APP_DIR/core" "$APP_DIR/docs"
 cp -R "$SCRIPT_DIR/core" "$APP_DIR/core"
 cp -R "$SCRIPT_DIR/docs" "$APP_DIR/docs"
 
+# 8b. Claude Code skill (user scope = available from any directory)
+if [[ -d "$SCRIPT_DIR/.claude/skills/autocut" ]]; then
+  say "Installing Claude Code skill into ~/.claude/skills/autocut..."
+  mkdir -p "$HOME/.claude/skills"
+  rm -rf "$HOME/.claude/skills/autocut"
+  cp -R "$SCRIPT_DIR/.claude/skills/autocut" "$HOME/.claude/skills/"
+fi
+
+# 8c. Register the MCP server with Claude Code in user scope (so it's visible
+# from any working directory). Server itself runs only while the AutoCut Panel
+# is open -- this just stores the URL in Claude's config.
+if command -v claude >/dev/null 2>&1; then
+  say "Registering AutoCut MCP with Claude Code (user scope)..."
+  claude mcp remove autocut >/dev/null 2>&1 || true
+  claude mcp add --scope user autocut --transport http \
+    http://127.0.0.1:7741/mcp >/dev/null 2>&1 && \
+    echo "    ✓ autocut MCP registered" || \
+    warn "Could not auto-register MCP. Run manually: claude mcp add --scope user autocut --transport http http://127.0.0.1:7741/mcp"
+fi
+
 # 9. Resolve Scripts launcher
 say "Installing launcher into Resolve Scripts > Utility..."
 mkdir -p "$SCRIPTS_DIR"
