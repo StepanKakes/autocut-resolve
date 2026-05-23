@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import engine                       # noqa: E402
 import captions                     # noqa: E402
 import transcribe                   # noqa: E402
+import ai                           # noqa: E402
 from fillers import FILLER_GROUPS   # noqa: E402
 
 CASE_OPTIONS = [("beze změny", "asis"), ("První velké (věta)", "sentence"),
@@ -293,7 +294,9 @@ def run(resolve_app=None):
     gen_cap_btn.pack(fill="x", pady=(2, 6))
 
     takes_btn = ttk.Button(main, text="🎬 Vybrat nejlepší pokus ze skupin", state="disabled")
-    takes_btn.pack(fill="x", pady=(0, 0))
+    takes_btn.pack(fill="x", pady=(0, 4))
+    ai_btn = ttk.Button(main, text="🤖 Nech sestříhat AI (Claude)", state="disabled")
+    ai_btn.pack(fill="x", pady=(0, 0))
 
     # ---- actions ----
     act = ttk.Frame(main)
@@ -511,6 +514,8 @@ def run(resolve_app=None):
         apply_btn.configure(state="disabled" if (b or not state["analysis"]) else "normal")
         gen_cap_btn.configure(state="disabled" if b else "normal")
         takes_btn.configure(state="disabled" if (b or not state["analysis"]) else "normal")
+        ai_btn.configure(state="disabled" if (b or not state["analysis"]
+                                              or not ai.claude_available()) else "normal")
 
     def on_stop():
         if state["cancel"]:
@@ -535,6 +540,21 @@ def run(resolve_app=None):
                 log_q.put(("__ANALYSIS__", a))
             except transcribe.Cancelled:
                 log_q.put(("__DONE__", "Zastaveno ⏹"))
+            except Exception as exc:
+                log_q.put(("__ERR__", str(exc)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_ai_suggest():
+        if state["busy"] or not state["analysis"]:
+            return
+        set_busy(True)
+        status.configure(text="🤖 Claude přemýšlí nad přepisem… (může chvíli trvat)")
+        analysis = state["analysis"]
+
+        def worker():
+            try:
+                n = ai.suggest_cuts(analysis, log=lambda m: log_q.put(str(m)))
+                log_q.put(("__AI__", n))
             except Exception as exc:
                 log_q.put(("__ERR__", str(exc)))
         threading.Thread(target=worker, daemon=True).start()
@@ -627,6 +647,15 @@ def run(resolve_app=None):
                         if state["live_dirty"]:
                             state["live_dirty"] = False
                             schedule_live()
+                    elif kind == "__AI__":
+                        restyle_all()
+                        update_summary()
+                        set_busy(False)
+                        status.configure(
+                            text=f"🤖 Claude navrhl smazat {val} slov. "
+                                 "Mrkni, případně klikáním uprav, pak Aplikovat střih.")
+                        if v_live.get():
+                            schedule_live()
                     elif kind == "__DONE__":
                         set_busy(False)
                         status.configure(text=val)
@@ -644,7 +673,10 @@ def run(resolve_app=None):
     apply_btn.configure(command=lambda: start_apply(live=False))
     gen_cap_btn.configure(command=on_gen_captions)
     takes_btn.configure(command=open_takes_window)
+    ai_btn.configure(command=on_ai_suggest)
     live_cb.configure(command=on_live_toggle)
+    if not ai.claude_available():
+        ai_btn.configure(text="🤖 AI (nainstaluj `claude` CLI)", state="disabled")
 
     # Recompute the transcript marks live whenever a filter option changes.
     for _v in list(group_vars.values()) + [v_rep, v_repthr, v_custom, v_sil]:

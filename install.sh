@@ -109,7 +109,7 @@ if PROJECT_CORE not in sys.path:
     sys.path.insert(0, PROJECT_CORE)
 
 for _name in ("ui", "engine", "captions", "transcribe", "srt", "silence",
-              "fillers", "repeats", "intervals", "clips", "resolve_connect"):
+              "fillers", "repeats", "intervals", "clips", "resolve_connect", "ai"):
     sys.modules.pop(_name, None)
 
 import ui  # noqa: E402
