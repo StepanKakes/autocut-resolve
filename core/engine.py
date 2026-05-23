@@ -139,6 +139,7 @@ def analyze(settings=None, log=print, resolve_app=None, cancel=None):
     resolve, project, media_pool, timeline = get_context(resolve_app)
     fps = float(timeline.GetSetting("timelineFrameRate") or
                 project.GetSetting("timelineFrameRate") or 25)
+    tl_start_frame = int(timeline.GetStartFrame())
     log(f"Timeline: {timeline.GetName()} @ {fps} fps")
 
     if timeline.GetName().endswith(cfg["suffix"]):
@@ -173,6 +174,12 @@ def analyze(settings=None, log=print, resolve_app=None, cancel=None):
             word_cache[key] = [dict(w, start=w["start"] + cs, end=w["end"] + cs) for w in wl]
         words = [dict(w, auto_cut=False, auto_reason="", manual=None, cut=False, reason="")
                  for w in word_cache[key]]
+        # Stamp each word with its position on the *timeline*, so the panel can
+        # karaoke-highlight the current word during playback.
+        rec_offset_s = (clip["rec_start_frame"] - tl_start_frame) / fps
+        for w in words:
+            w["tl_start"] = rec_offset_s + (w["start"] - cs)
+            w["tl_end"] = rec_offset_s + (w["end"] - cs)
         phrases = _phrases_from_words(words)
         take_groups = detect_take_groups(phrases, threshold=cfg["repeat_threshold"])
 
@@ -188,7 +195,9 @@ def analyze(settings=None, log=print, resolve_app=None, cancel=None):
     n_cut = sum(1 for c in out_clips for w in c["words"] if w["cut"])
     log(f"Analysis done: {sum(len(c['words']) for c in out_clips)} words, "
         f"{n_cut} marked for removal.")
-    return {"fps": fps, "clips": out_clips, "timeline_name": timeline.GetName()}
+    return {"fps": fps, "clips": out_clips,
+            "timeline_name": timeline.GetName(),
+            "timeline_start_frame": tl_start_frame}
 
 
 def apply(analysis, settings=None, log=print, resolve_app=None, replace_timeline=None):

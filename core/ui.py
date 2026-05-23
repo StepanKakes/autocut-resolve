@@ -26,6 +26,20 @@ from fillers import FILLER_GROUPS   # noqa: E402
 CASE_OPTIONS = [("beze změny", "asis"), ("První velké (věta)", "sentence"),
                 ("VŠE VELKÝM", "upper"), ("vše malé", "lower")]
 
+
+def _tc_to_seconds(tc, fps):
+    """Parse 'HH:MM:SS:FF' or 'HH:MM:SS;FF' timecode to seconds."""
+    if not tc:
+        return 0.0
+    parts = tc.replace(";", ":").split(":")
+    if len(parts) < 4:
+        return 0.0
+    try:
+        h, m, s, f = (int(p) for p in parts[:4])
+    except ValueError:
+        return 0.0
+    return h * 3600 + m * 60 + s + (f / max(fps, 1.0))
+
 _GROUP_NAMES = {
     "hesitation": "Hezitace", "verbal": "Slovní vata",
     "phrases": "Fráze", "connectors": "Spojky-vata",
@@ -356,6 +370,10 @@ def run(resolve_app=None):
         padx=12, pady=10, spacing1=2, spacing3=4,
         highlightthickness=1, highlightbackground=p["border"])
     txt.pack(fill="both", expand=True, pady=(0, 6))
+    # Karaoke highlight follows Resolve playback; bg only, so the per-word
+    # strikethrough/colour stays visible underneath.
+    txt.tag_configure("playhead", background="#caaa3d")
+    txt.tag_lower("playhead")
 
     log_widget = scrolledtext.ScrolledText(
         main, height=5, state="disabled", wrap="word", font=("Menlo", 10),
@@ -758,5 +776,49 @@ def run(resolve_app=None):
         mcp_status.configure(text="💬 MCP server startuje…")
         root.after(300, _probe_mcp)
 
+    # Karaoke playhead: read Resolve's current timecode periodically and
+    # highlight the word being spoken right now. Only runs when the timeline
+    # currently open in Resolve matches the analysed one.
+    state["playhead_idx"] = None
+    state["playhead_warned"] = False
+
+    def update_playhead():
+        a = state.get("analysis")
+        words = state.get("words_flat") or []
+        if a and resolve_app is not None and words:
+            try:
+                pm = resolve_app.GetProjectManager()
+                proj = pm.GetCurrentProject() if pm else None
+                tl = proj.GetCurrentTimeline() if proj else None
+                if tl and tl.GetName() == a.get("timeline_name"):
+                    fps = a.get("fps", 25)
+                    tl_start = a.get("timeline_start_frame", 0)
+                    cur = _tc_to_seconds(tl.GetCurrentTimecode(), fps) - tl_start / fps
+                    new_idx = None
+                    for i, w in enumerate(words):
+                        ts, te = w.get("tl_start"), w.get("tl_end")
+                        if ts is None or te is None:
+                            continue
+                        if ts <= cur <= te + 0.05:
+                            new_idx = i
+                            break
+                    if new_idx != state["playhead_idx"]:
+                        txt.tag_remove("playhead", "1.0", "end")
+                        if new_idx is not None:
+                            r = txt.tag_ranges(f"w{new_idx}")
+                            if r:
+                                txt.tag_add("playhead", r[0], r[1])
+                                txt.see(r[0])
+                        state["playhead_idx"] = new_idx
+                else:
+                    # different timeline open -> clear any leftover highlight
+                    if state["playhead_idx"] is not None:
+                        txt.tag_remove("playhead", "1.0", "end")
+                        state["playhead_idx"] = None
+            except Exception:
+                pass
+        root.after(180, update_playhead)
+
+    root.after(500, update_playhead)
     root.after(120, poll)
     root.mainloop()
