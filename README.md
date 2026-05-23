@@ -4,6 +4,10 @@ Self-hosted alternative to autocut.com, built on the DaVinci Resolve scripting
 API. Czech-first, runs entirely on your Mac (no cloud, no API keys), works in
 the **free** version of DaVinci Resolve.
 
+👉 **Full visual guide (Czech):** [docs/USAGE.md](docs/USAGE.md)
+
+![AutoCut panel with annotated controls](docs/ui-guide.png)
+
 What it does, all driven by a Tkinter panel inside Resolve:
 
 - **Auto cut silences** — energy-based silence detection, ripple-cuts them out

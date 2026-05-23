@@ -49,6 +49,106 @@ def _group_label(key):
     return f"{_GROUP_NAMES.get(key, key)}: {', '.join(FILLER_GROUPS[key][:4])}"
 
 
+HELP_TEXT = """\
+AutoCut — návod v kostce
+
+POSTUP
+   1. Otevři PŮVODNÍ timeline (jeden dlouhý klip na V1).
+   2. Nastav volby v horní části okna.
+   3. Klikni "1. Analyzovat" — whisper přepíše audio a v přepisu označí
+      navržená slova ke smazání.
+   4. V přepisu DOLE klikej na slova — přepneš je smazat / ponechat.
+   5. Pokud jsi natáčel více pokusů, klikni "Vybrat nejlepší pokus" a v
+      okně vyber ten povedený.
+   6. "2. Aplikovat střih" vytvoří NOVOU timeline "<jméno> - AutoCut"
+      se střihem. Tvoje původní timeline zůstává netknutá.
+
+CO DĚLAJÍ JEDNOTLIVÁ TLAČÍTKA / VOLBY
+
+  Jazyk
+      Jazyk, ve kterém mluvíš (whisper podle něj přepíše).
+
+  Vyříznout ticho + Práh / Min. ticho / Rezerva
+      Citlivost detekce ticha. Práh = co je tišší = ticho (−30 dB ok).
+      Min. ticho = kratší pauzy se neřežou. Rezerva = ponechá dech
+      kolem řeči, aby se neřezala slova.
+
+  Skupiny vaty (Hezitace / Slovní vata / Fráze / Spojky-vata)
+      Stačí zaškrtnout aspoň jednu — vata se v přepisu označí oranžově.
+
+  Vlastní slova
+      Vlastní seznam k vyříznutí oddělený čárkou. Funguje hned, bez
+      nové analýzy.
+
+  Skupiny pokusů — Podobnost pokusů
+      Při analýze hledá VEDLE SEBE věty s podobností nad tento práh
+      (0.80 default). Najde-li, jsou to pokusy o stejnou větu.
+
+  Sekce Titulky
+      Slov na titulek — 0 = bez limitu, jinak max počet slov na cue.
+      Interpunkce — nechat/odstranit. Písmena — beze změny / Věta /
+      VŠE VELKÝM / vše malé.
+
+  Vytvořit titulky i při Aplikovat střih
+      Po Aplikovat se rovnou udělá i titulková stopa (využije hotový
+      přepis, žádný další whisper).
+
+  Vygenerovat titulky (na aktuální timeline)
+      Titulky na timeline, kterou máš právě otevřenou. Pokud jsi
+      analyzoval, vezme přepis odtud; jinak přepíše timeline znovu.
+
+  🎬 Vybrat nejlepší pokus ze skupin
+      Po analýze ukáže kolik skupin našlo. Klikem otevře okno se
+      všemi pokusy ve skupině — vybereš ten povedený, ostatní se
+      automaticky vystřihnou.
+
+  1. Analyzovat
+      Spustí přepis. Dá se přerušit tlačítkem "⏹ Zastavit".
+
+  Živě
+      Po každém kliknutí na slovo se Resolve sám přestaví. Editor à
+      la Descript.
+
+  2. Aplikovat střih
+      Vytvoří novou timeline se střihem. Původní zůstává nezměněná.
+
+BARVY V PŘEPISU
+   oranžová = vata
+   modrá    = jiný (nezvolený) pokus
+   červená  = tvoje ruční volba
+
+ÚPLNÝ NÁVOD S OBRÁZKEM
+   github.com/StepanKakes/autocut-resolve/blob/main/docs/USAGE.md
+"""
+
+
+def _open_help_window(root, p):
+    win = tk.Toplevel(root)
+    win.title("AutoCut — nápověda")
+    win.geometry("720x640")
+    win.configure(bg=p["bg"])
+
+    body = scrolledtext.ScrolledText(
+        win, wrap="word", font=("Helvetica", 12),
+        bg=p["panel"], fg=p["fg"], insertbackground=p["fg"],
+        relief="flat", borderwidth=0, padx=14, pady=12,
+        highlightthickness=1, highlightbackground=p["border"])
+    body.insert("1.0", HELP_TEXT)
+    body.configure(state="disabled")
+    body.pack(fill="both", expand=True, padx=12, pady=(12, 8))
+
+    btn_row = ttk.Frame(win)
+    btn_row.pack(fill="x", padx=12, pady=(0, 12))
+    import webbrowser
+
+    def _open_github():
+        webbrowser.open("https://github.com/StepanKakes/autocut-resolve/blob/main/docs/USAGE.md")
+
+    ttk.Button(btn_row, text="Otevřít kompletní návod na GitHubu",
+               command=_open_github).pack(side="left")
+    ttk.Button(btn_row, text="Zavřít", command=win.destroy).pack(side="right")
+
+
 def _apply_theme(root):
     """Use the native macOS aqua theme (checkboxes/buttons render natively and
     inherit dark mode). Only the tk widgets we control directly (Text, Spinbox)
@@ -84,6 +184,9 @@ def run(resolve_app=None):
     ttk.Label(header, text="AutoCut", style="Title.TLabel").pack(side="left")
     ttk.Label(header, text="přepis → klikni → střih", style="Muted.TLabel").pack(
         side="left", padx=10, pady=(10, 0))
+    help_btn = ttk.Button(header, text="?  Nápověda",
+                          command=lambda: _open_help_window(root, p))
+    help_btn.pack(side="right")
     ttk.Separator(main, orient="horizontal").pack(fill="x", pady=(8, 8))
 
     # ---- options grid ----
